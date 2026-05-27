@@ -44,8 +44,8 @@ export class Reviews {
 	/**
 	 * Authoritative count of *running* review containers, read from Docker — so a
 	 * completed or removed container stops counting (no in-memory drift, which was
-	 * the old `_inFlight` counter's bug). Falls back to 0 if Docker is unreachable
-	 * (createContainer then fails loudly rather than silently blocking).
+	 * the old `_inFlight` counter's bug). Throws HttpStatusError(503) if Docker is
+	 * unreachable — fail closed, never under-report and admit past the cap.
 	 *
 	 * @returns {Promise<number>}
 	 */
@@ -56,8 +56,11 @@ export class Reviews {
 				label: `${LABEL_MANAGED}=true`
 			});
 			return Array.isArray(list) ? list.length : 0;
-		} catch {
-			return 0;
+		} catch (e) {
+			// Fail closed: never report 0 on a Docker error — that would let start()
+			// admit past the cap. Surface 503 so the caller retries instead of the
+			// agent overcommitting while other managed containers are still running.
+			throw new HttpStatusError(503, `cannot reach Docker to check capacity: ${e.message}`);
 		}
 	}
 
