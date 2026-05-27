@@ -32,15 +32,33 @@ export class Reviews {
 		this.config = config;
 		this.log = log;
 		this.memoryBytes = parseMemoryToBytes(config.prAgentMemory);
-		/** @type {Map<string, ReviewRecord>} running reviews; evicted on cancel. */
+		/** reviewId → record, for the cancel/logs fast path (not the cap source). */
 		this.active = new Map();
-		this._inFlight = 0;
+		// Synchronous count of in-flight start() calls — containers being created
+		// but not yet observable as "running". Reserved before any await so a
+		// burst of concurrent /review calls can't over-admit past the cap.
+		this._starting = 0;
 		this._imagePulled = false;
 	}
 
-	/** Reviews currently running — an O(1) counter kept in sync with transitions. */
-	get inFlight() {
-		return this._inFlight;
+	/**
+	 * Authoritative count of *running* review containers, read from Docker — so a
+	 * completed or removed container stops counting (no in-memory drift, which was
+	 * the old `_inFlight` counter's bug). Falls back to 0 if Docker is unreachable
+	 * (createContainer then fails loudly rather than silently blocking).
+	 *
+	 * @returns {Promise<number>}
+	 */
+	async runningCount() {
+		try {
+			const list = await this.docker.listContainers({
+				all: false,
+				label: `${LABEL_MANAGED}=true`
+			});
+			return Array.isArray(list) ? list.length : 0;
+		} catch {
+			return 0;
+		}
 	}
 
 	/**
@@ -75,69 +93,86 @@ export class Reviews {
 		if (typeof prUrl !== 'string' || !prUrl) {
 			throw new HttpStatusError(400, 'pr_url is required');
 		}
-		if (this._inFlight >= this.config.maxConcurrentReviews) {
-			throw new HttpStatusError(429, 'agent at max concurrent reviews');
-		}
 
-		const reviewId = crypto.randomUUID();
-		const env = buildPrAgentEnv({
-			providerKeys: body.provider_keys || {},
-			githubToken: body.github_token,
-			model: body.model,
-			reasoningEffort: body.reasoning_effort
-		});
-		const createConfig = buildPrAgentCreateConfig({
-			image: this.config.prAgentImage,
-			env,
-			cmd: Array.isArray(body.cmd) ? body.cmd : defaultPrAgentCmd(body.command, prUrl),
-			memoryBytes: this.memoryBytes,
-			networkMode: this.config.prAgentNetwork,
-			labels: { [LABEL_MANAGED]: 'true', [LABEL_REVIEW_ID]: reviewId }
-		});
-
-		// Pull once per process — the image rarely changes mid-session and the
-		// explicit /pull-images endpoint exists for proactive warming. A missing
-		// image still surfaces via createContainer below.
-		if (!this._imagePulled) {
-			try {
-				await this.docker.pullImage(this.config.prAgentImage, {
-					platform: this.config.prAgentPlatform
-				});
-				this._imagePulled = true;
-			} catch (e) {
-				this.log(`pull failed (continuing if cached): ${e.message}`);
+		// Reserve a slot synchronously (before the first await) so concurrent
+		// /review calls can't all read the same pre-await count and over-admit.
+		this._starting++;
+		try {
+			const running = await this.runningCount();
+			// running = already-running containers; _starting includes this call.
+			if (running + this._starting - 1 >= this.config.maxConcurrentReviews) {
+				throw new HttpStatusError(429, 'agent at max concurrent reviews');
 			}
+
+			const reviewId = crypto.randomUUID();
+			const env = buildPrAgentEnv({
+				providerKeys: body.provider_keys || {},
+				githubToken: body.github_token,
+				model: body.model,
+				reasoningEffort: body.reasoning_effort
+			});
+			const createConfig = buildPrAgentCreateConfig({
+				image: this.config.prAgentImage,
+				env,
+				cmd: Array.isArray(body.cmd) ? body.cmd : defaultPrAgentCmd(body.command, prUrl),
+				memoryBytes: this.memoryBytes,
+				networkMode: this.config.prAgentNetwork,
+				labels: { [LABEL_MANAGED]: 'true', [LABEL_REVIEW_ID]: reviewId }
+			});
+
+			// Pull once per process — the image rarely changes mid-session and the
+			// explicit /pull-images endpoint exists for proactive warming. A missing
+			// image still surfaces via createContainer below.
+			if (!this._imagePulled) {
+				try {
+					await this.docker.pullImage(this.config.prAgentImage, {
+						platform: this.config.prAgentPlatform
+					});
+					this._imagePulled = true;
+				} catch (e) {
+					this.log(`pull failed (continuing if cached): ${e.message}`);
+				}
+			}
+
+			const created = await this.docker.createContainer(`cr-review-${reviewId}`, createConfig, {
+				platform: this.config.prAgentPlatform
+			});
+			try {
+				await this.docker.startContainer(created.Id);
+			} catch (e) {
+				// Don't leak a created-but-unstarted container (with its secret env).
+				await this.docker.removeContainer(created.Id, { force: true }).catch(() => {});
+				throw e;
+			}
+
+			this.active.set(reviewId, {
+				reviewId,
+				containerId: created.Id,
+				status: 'running',
+				prUrl,
+				startedAt: Date.now()
+			});
+			this.log(`review ${reviewId} started (container ${created.Id.slice(0, 12)})`);
+			return { reviewId, containerId: created.Id, status: 'running' };
+		} finally {
+			this._starting--;
 		}
-
-		const created = await this.docker.createContainer(`cr-review-${reviewId}`, createConfig, {
-			platform: this.config.prAgentPlatform
-		});
-		await this.docker.startContainer(created.Id);
-
-		this.active.set(reviewId, {
-			reviewId,
-			containerId: created.Id,
-			status: 'running',
-			prUrl,
-			startedAt: Date.now()
-		});
-		this._inFlight++;
-		this.log(`review ${reviewId} started (container ${created.Id.slice(0, 12)})`);
-		return { reviewId, containerId: created.Id, status: 'running' };
 	}
 
 	/**
-	 * Cancel a review (stop + remove its container) and evict it.
+	 * Cancel a review: stop + remove its container, then evict the record. The
+	 * record is evicted ONLY after a successful removal (removeContainer throws on
+	 * a non-2xx/404 status), so a failed teardown never reports a false "cancelled"
+	 * while the container keeps running.
 	 *
 	 * @param {string} reviewId
 	 * @returns {Promise<{ reviewId: string, status: string }>}
 	 */
 	async cancel(reviewId) {
 		const containerId = await this._resolveContainer(reviewId);
+		// Best-effort stop; the force-remove below is the real teardown.
 		await this.docker.stopContainer(containerId, { t: CANCEL_STOP_TIMEOUT_SECS }).catch(() => {});
 		await this.docker.removeContainer(containerId, { force: true });
-		const record = this.active.get(reviewId);
-		if (record?.status === 'running') this._inFlight = Math.max(0, this._inFlight - 1);
 		this.active.delete(reviewId);
 		this.log(`review ${reviewId} cancelled`);
 		return { reviewId, status: 'cancelled' };

@@ -4,8 +4,13 @@
 //   1. Source must be a tailnet IP (the dashboard reaches the agent over
 //      WireGuard; nothing else should).
 //   2. A `Bearer` session token must be present and STRUCTURALLY valid
-//      (`parseToken` — regex + CRC). Issuance + authoritative verification of the
-//      rotating `rpc` token is Sprint 5; here we confirm shape + provenance.
+//      (`parseToken` — regex + CRC). NOTE: the CRC is a corruption/typo guard,
+//      NOT a secret — it does NOT prove the dashboard issued the token, and any
+//      tailnet peer could mint a structurally-valid one. In Sprint 4 the
+//      tailnet-membership gate (1) is therefore the real security boundary;
+//      cryptographic verification of the rotating `rpc` token against the
+//      dashboard is Sprint 5 (see README "Security model"). This is a deliberate,
+//      documented scope line, not an oversight.
 
 import { parseToken } from './token.js';
 import { isLoopbackIp, isTailnetIp, normalizeIp } from './net.js';

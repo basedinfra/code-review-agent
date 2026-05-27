@@ -77,13 +77,21 @@ tailscale_up() {
 	local hostname="${AGENT_HOSTNAME:-code-review-${BACKEND_ID}}"
 	local tags="tag:backend-${BACKEND_ID},tag:baseinfra-agent"
 	log "joining tailnet via ${LOGIN_SERVER} as ${hostname} (${tags})"
-	# Auth key via env, never argv: pass through the environment to tailscale.
-	TS_AUTHKEY="$TS_AUTHKEY" tailscale up \
+	# Pass the pre-auth key via a 0600 file (tailscale's file: scheme), NOT as an
+	# argv value — argv is world-readable via `ps` for the lifetime of the command.
+	local keyfile
+	keyfile="$(mktemp)"
+	chmod 600 "$keyfile"
+	printf '%s' "$TS_AUTHKEY" >"$keyfile"
+	trap 'rm -f "$keyfile"' EXIT
+	tailscale up \
 		--login-server="$LOGIN_SERVER" \
-		--authkey="$TS_AUTHKEY" \
+		--authkey="file:$keyfile" \
 		--hostname="$hostname" \
 		--advertise-tags="$tags" \
 		--accept-routes
+	rm -f "$keyfile"
+	trap - EXIT
 }
 
 write_env() {
@@ -101,7 +109,11 @@ write_env() {
 
 fetch_compose() {
 	local dest="$INSTALL_DIR/docker-compose.yml"
-	if [ -f ./docker-compose.yml ]; then
+	# Default: always fetch the pinned compose file. A stray ./docker-compose.yml
+	# in the user's cwd (when run via curl|bash) must NOT be picked up — only
+	# honor a local file under an explicit DEV_LOCAL_COMPOSE=1 opt-in.
+	if [ "${DEV_LOCAL_COMPOSE:-}" = "1" ] && [ -f ./docker-compose.yml ]; then
+		log "using local ./docker-compose.yml (DEV_LOCAL_COMPOSE=1)"
 		cp ./docker-compose.yml "$dest"
 	else
 		log "fetching docker-compose.yml @ ${REF}"

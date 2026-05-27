@@ -253,19 +253,46 @@ export class DockerClient {
 		return this._json('POST', `/containers/${encodeURIComponent(id)}/start`, { signal });
 	}
 
-	/** @param {string} id @param {{ t?: number, signal?: AbortSignal }} [opts] */
-	stopContainer(id, { t = 10, signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS) } = {}) {
-		return this._raw('POST', `/containers/${encodeURIComponent(id)}/stop?t=${t}`, { signal });
+	/**
+	 * Stop a container. 204 (stopped) / 304 (already stopped) / 404 (already
+	 * gone) are success; any other status throws so a failed stop is never
+	 * mistaken for success.
+	 *
+	 * @param {string} id @param {{ t?: number, signal?: AbortSignal }} [opts]
+	 */
+	async stopContainer(id, { t = 10, signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS) } = {}) {
+		const res = await this._raw('POST', `/containers/${encodeURIComponent(id)}/stop?t=${t}`, {
+			signal
+		});
+		if (![204, 304, 404].includes(res.status)) {
+			throw new DockerError(`stop ${id} → ${res.status}: ${res.body.toString('utf8')}`, res.status);
+		}
+		return res;
 	}
 
-	/** @param {string} id @param {{ force?: boolean, v?: boolean, signal?: AbortSignal }} [opts] */
-	removeContainer(
+	/**
+	 * Remove a container. 204 (removed) / 404 (already gone) are success; any
+	 * other status (403/409/500) throws — a caller must NOT evict its record
+	 * while the container is still alive.
+	 *
+	 * @param {string} id @param {{ force?: boolean, v?: boolean, signal?: AbortSignal }} [opts]
+	 */
+	async removeContainer(
 		id,
 		{ force = true, v = true, signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS) } = {}
 	) {
-		return this._raw('DELETE', `/containers/${encodeURIComponent(id)}?force=${force}&v=${v}`, {
-			signal
-		});
+		const res = await this._raw(
+			'DELETE',
+			`/containers/${encodeURIComponent(id)}?force=${force}&v=${v}`,
+			{ signal }
+		);
+		if (![204, 404].includes(res.status)) {
+			throw new DockerError(
+				`remove ${id} → ${res.status}: ${res.body.toString('utf8')}`,
+				res.status
+			);
+		}
+		return res;
 	}
 
 	/** @param {string} id */

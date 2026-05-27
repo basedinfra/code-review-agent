@@ -9,10 +9,24 @@ import { HttpStatusError } from './errors.js';
 import { DEFAULT_LOG_TAIL } from './reviews.js';
 
 const MAX_BODY_BYTES = 1 << 20; // 1 MiB
+const MAX_LOG_TAIL = 10000;
 
 function sendJson(res, status, obj) {
 	res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
 	res.end(JSON.stringify(obj));
+}
+
+/**
+ * Clamp the `tail` query param to a positive integer ≤ MAX_LOG_TAIL. Guards
+ * against `?tail=-100` (which `Number(x) || DEFAULT` would let through, since
+ * `-100 || 1000 === -100`) and absurdly large values.
+ *
+ * @param {string | null} raw
+ * @returns {number}
+ */
+function parseTail(raw) {
+	const n = Number(raw);
+	return Number.isInteger(n) && n > 0 ? Math.min(n, MAX_LOG_TAIL) : DEFAULT_LOG_TAIL;
 }
 
 /**
@@ -91,7 +105,7 @@ export function createRequestListener({
 			const logsMatch = method === 'GET' && /^\/logs\/([^/]+)$/.exec(path);
 			if (logsMatch) {
 				const text = await reviews.logs(decodeURIComponent(logsMatch[1]), {
-					tail: Number(url.searchParams.get('tail')) || DEFAULT_LOG_TAIL
+					tail: parseTail(url.searchParams.get('tail'))
 				});
 				res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
 				return res.end(text);

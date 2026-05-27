@@ -6,6 +6,8 @@ import { generateSessionToken } from '../src/token.js';
 
 const { token } = generateSessionToken();
 
+let lastLogsOpts = null;
+
 function mockRes() {
 	return {
 		statusCode: null,
@@ -36,7 +38,10 @@ function mockReq({ method = 'GET', url = '/', remoteAddress = '100.64.0.1', auth
 const fakeReviews = {
 	start: async () => ({ reviewId: 'rid', containerId: 'cid', status: 'running' }),
 	cancel: async (id) => ({ reviewId: id, status: 'cancelled' }),
-	logs: async () => 'logtext',
+	logs: async (_id, opts) => {
+		lastLogsOpts = opts;
+		return 'logtext';
+	},
 	pullImage: async () => ({ image: 'img', platform: 'linux/amd64' })
 };
 const fakeDocker = { ping: async () => true, info: async () => ({ Name: 'docker-engine test' }) };
@@ -126,7 +131,8 @@ test('unknown route returns 404 (authed)', async () => {
 	assert.equal(res.statusCode, 404);
 });
 
-test('GET /logs/:id returns text/plain', async () => {
+test('GET /logs/:id returns text/plain and honors a valid tail', async () => {
+	lastLogsOpts = null;
 	const res = await call({
 		method: 'GET',
 		url: '/logs/rid?tail=50',
@@ -136,4 +142,17 @@ test('GET /logs/:id returns text/plain', async () => {
 	assert.equal(res.statusCode, 200);
 	assert.equal(res.headers['Content-Type'], 'text/plain; charset=utf-8');
 	assert.equal(res.body, 'logtext');
+	assert.equal(lastLogsOpts.tail, 50);
+});
+
+test('GET /logs/:id clamps a negative tail to the default', async () => {
+	lastLogsOpts = null;
+	const res = await call({
+		method: 'GET',
+		url: '/logs/rid?tail=-100',
+		remoteAddress: '100.64.0.5',
+		authorization: `Bearer ${token}`
+	});
+	assert.equal(res.statusCode, 200);
+	assert.equal(lastLogsOpts.tail, 1000); // DEFAULT_LOG_TAIL, never -100
 });

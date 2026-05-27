@@ -39,3 +39,9 @@ Initial release — Sprint 4 Phase 0 (the agent image repo).
 - launchd/systemd service templates + installer `--dry-run` (Phase 2).
 - Daily log-prune task (7 d / 100 MB) (Phase 3).
 - CI Mac-runner end-to-end pairing test + the `/review` driver (Phase 4 / Sprint 5).
+- **Verified RPC-token auth** — rotating `rpc` token validated against the
+  dashboard (Sprint 5). Until then the tailnet-membership gate is the security
+  boundary and the `Bearer` check is structural only.
+- **Prompt review-container teardown** — capture results then remove the
+  container so provider keys don't linger in Docker config (Sprint 5, when the
+  dashboard drives the `/review` lifecycle).

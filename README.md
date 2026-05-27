@@ -92,9 +92,17 @@ is the v1 trade-off (an owned multi-arch PR-Agent image is a future option).
   proxy does, behind a `CONTAINERS/IMAGES/POST/NETWORKS` allowlist with `EXEC=0`.
 - **Tailnet-bound RPC.** The HTTP server binds the `100.64.0.0/10` tailnet
   address; the dashboard reaches it over WireGuard. Requests from non-tailnet
-  sources are rejected.
-- **Transient provider keys.** Keys live only in the `/review` request and the
-  ephemeral container's env — never written to the agent's disk.
+  sources are rejected. **In Sprint 4 the tailnet is the security boundary** —
+  the `Bearer bisess_*` check is structural (regex + CRC), not cryptographic
+  proof the dashboard issued the token (any tailnet peer could mint a
+  well-formed one). Verified, rotating `rpc`-token auth against the dashboard
+  lands in Sprint 5.
+- **Transient provider keys.** Keys arrive in the `/review` request and are
+  passed to the ephemeral container's env — never written to the agent's disk.
+  They do persist in that container's Docker config (readable via
+  `docker inspect`) for its lifetime; capturing results and tearing the
+  container down promptly is the dashboard's responsibility once it drives the
+  review lifecycle (Sprint 5).
 - **Secrets via stdin/env.** The bootstrap token and Tailscale pre-auth key are
   delivered via stdin/env (never argv, which is visible in `ps`); any on-disk
   secret is mode `0600`.
