@@ -38,6 +38,12 @@
 # a sidecar) is validated in Sprint 4 Phase 4. See README "Security model".
 set -euo pipefail
 
+# Bash 5.2+ enables `patsub_replacement`, which makes an unescaped `&` in the
+# replacement of ${var//pat/repl} expand to the matched text — corrupting an
+# INSTALL_DIR containing `&` in render_template(). Force literal replacements
+# (the option doesn't exist on bash <5.2, so suppress the error there).
+shopt -u patsub_replacement 2>/dev/null || true
+
 REPO_RAW='https://raw.githubusercontent.com/basedinfra/code-review-agent'
 # Git ref for fetching repo assets (docker-compose.yml, the service files) — a
 # real branch/tag, distinct from the Docker image tag, which is published as :v1

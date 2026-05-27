@@ -127,10 +127,29 @@ test('--help documents the flags and exits 0', () => {
 
 test('agent-boot.sh refuses a dir with no docker-compose.yml (before any docker call)', () => {
 	// The compose-file guard is the first line of the wrapper's main(), ahead of
-	// the docker/tailscale waits — so this never shells out to a real engine.
-	const { status, stderr } = runScript(bootScript, [join(tmpdir(), 'cr-agent-nonexistent-dir')]);
-	assert.notEqual(status, 0);
-	assert.match(stderr, /no docker-compose\.yml/);
+	// the docker/tailscale waits — so this never shells out to a real engine. A
+	// fresh empty temp dir keeps the assertion deterministic.
+	const tmp = mkdtempSync(join(tmpdir(), 'cr-agent-missing-compose-'));
+	try {
+		const { status, stderr } = runScript(bootScript, [tmp]);
+		assert.notEqual(status, 0);
+		assert.match(stderr, /no docker-compose\.yml/);
+	} finally {
+		rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test('render_template preserves & in paths (no bash 5.2 patsub_replacement corruption)', () => {
+	const out = renderTemplate(serviceTmpl, [
+		'BOOT_SCRIPT=/opt/r&d/agent-boot.sh',
+		'INSTALL_DIR=/opt/r&d',
+		'SERVICE_USER=op'
+	]);
+	// With patsub_replacement (bash 5.2 default) an unescaped & expands back to the
+	// matched __INSTALL_DIR__ token; assert the literal & survived instead.
+	assert.match(out, /"\/opt\/r&d\/agent-boot\.sh"/);
+	assert.match(out, /"\/opt\/r&d"/);
+	assert.doesNotMatch(out, /__[A-Z_]+__/);
 });
 
 // A path with spaces (a legal INSTALL_DIR override) is the case the old sed-based
