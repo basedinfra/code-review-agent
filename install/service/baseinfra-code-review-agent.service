@@ -1,0 +1,27 @@
+# BaseInfra code-review agent — Linux reboot-survival (stage 1 of 2).
+#
+# Type=oneshot + RemainAfterExit=yes: the unit counts as "active" once the
+# stage-2 readiness wrapper (__BOOT_SCRIPT__) has brought the compose stack up
+# and exited 0. Ordering: After/Wants docker.service so the engine is up first,
+# network-online so tailscale can hand out an address. Per-container liveness
+# after bring-up is Docker's `restart: unless-stopped`, not systemd's. The
+# installer renders the __PLACEHOLDERS__, installs this to /etc/systemd/system,
+# then `systemctl enable --now`.
+
+[Unit]
+Description=BaseInfra code-review agent (docker compose stack)
+Documentation=https://github.com/basedinfra/code-review-agent
+Wants=docker.service network-online.target
+After=docker.service network-online.target tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=__SERVICE_USER__
+ExecStart=/bin/bash __BOOT_SCRIPT__ __INSTALL_DIR__
+ExecStop=/bin/sh -c 'cd __INSTALL_DIR__ && docker compose stop'
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

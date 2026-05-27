@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 for the major tag (`:v1`, `:v2`). Immutable date-stamped tags (`:v1.YYYYMMDD`)
 are produced by the weekly rebuild.
 
+## [Unreleased]
+
+### Added
+
+- **Reboot-survival service** (Sprint 4 Phase 2): the installer now installs a
+  launchd LaunchAgent (macOS) or a systemd unit (Linux) that brings the compose
+  stack back up after a reboot. Two-stage by design — a readiness wrapper
+  (`install/agent-boot.sh`) waits for the Docker engine and a tailnet IPv4 before
+  `docker compose up -d`, and the LaunchAgent/systemd unit is the boot trigger
+  that runs it. Per-container liveness stays Docker's job
+  (`restart: unless-stopped`); the unit handles only the boot kick + ordering.
+- Installer **`--dry-run`** (prints every step with secrets redacted and touches
+  nothing on disk, so an install can be previewed safely), **`--no-service`**
+  (alias `INSTALL_SERVICE=0`), and **`--help`** flags.
+
+### Changed
+
+- The installer fetches all repo assets (the compose file + the service
+  templates) through one `fetch_asset` helper pinned to `REF`.
+
 ## [1.0.0] — 2026-05-26
 
 Initial release — Sprint 4 Phase 0 (the agent image repo).
