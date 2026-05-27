@@ -139,6 +139,9 @@ export class DockerClient {
 							body: Buffer.concat(chunks)
 						})
 					);
+					// Without this, a mid-stream response error would hang the promise
+					// until the AbortSignal timeout instead of rejecting promptly.
+					res.on('error', reject);
 				}
 			);
 			req.on('error', reject);
@@ -212,7 +215,10 @@ export class DockerClient {
 		const qs = new URLSearchParams({ fromImage });
 		if (tag) qs.set('tag', tag);
 		if (platform) qs.set('platform', platform);
-		const res = await this._raw('POST', `/images/create?${qs}`, { signal });
+		const res = await this._raw('POST', `/images/create?${qs}`, {
+			signal,
+			maxBytes: DEFAULT_LOG_MAX_BYTES
+		});
 		const text = res.body.toString('utf8');
 		if (res.status >= 400)
 			throw new DockerError(`pull ${ref} → ${res.status}: ${text}`, res.status);

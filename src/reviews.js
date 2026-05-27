@@ -200,15 +200,18 @@ export class Reviews {
 	async _resolveContainer(reviewId) {
 		const record = this.active.get(reviewId);
 		if (record?.containerId) return record.containerId;
+		let list;
 		try {
-			const list = await this.docker.listContainers({
+			list = await this.docker.listContainers({
 				all: true,
 				label: `${LABEL_REVIEW_ID}=${reviewId}`
 			});
-			if (Array.isArray(list) && list[0]?.Id) return list[0].Id;
-		} catch {
-			// fall through to 404
+		} catch (e) {
+			// Docker/proxy unreachable — surface as 503, not a misleading 404 that
+			// would tell the caller the review does not exist.
+			throw new HttpStatusError(503, `cannot reach Docker to resolve review: ${e.message}`);
 		}
+		if (Array.isArray(list) && list[0]?.Id) return list[0].Id;
 		throw new HttpStatusError(404, `unknown review: ${reviewId}`);
 	}
 }

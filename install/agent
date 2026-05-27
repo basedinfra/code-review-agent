@@ -77,32 +77,35 @@ tailscale_up() {
 	local hostname="${AGENT_HOSTNAME:-code-review-${BACKEND_ID}}"
 	local tags="tag:backend-${BACKEND_ID},tag:baseinfra-agent"
 	log "joining tailnet via ${LOGIN_SERVER} as ${hostname} (${tags})"
-	# Pass the pre-auth key via a 0600 file (tailscale's file: scheme), NOT as an
-	# argv value — argv is world-readable via `ps` for the lifetime of the command.
-	local keyfile
-	keyfile="$(mktemp)"
-	chmod 600 "$keyfile"
-	printf '%s' "$TS_AUTHKEY" >"$keyfile"
-	trap 'rm -f "$keyfile"' EXIT
+	# NOTE: `tailscale up` has NO non-argv way to supply the key — no stdin, env,
+	# or file: input (verified against the Tailscale CLI docs; only `tailscale
+	# login` honors file:). The key is therefore briefly visible in this child
+	# process's argv via `ps` during the join. The mitigation is single-use,
+	# <=15-min pre-auth keys (the dashboard clamps them), so a key seen in argv is
+	# already spent/expired. The installer itself never takes the key as argv — it
+	# is read via stdin/env (see main()).
 	tailscale up \
 		--login-server="$LOGIN_SERVER" \
-		--authkey="file:$keyfile" \
+		--authkey="$TS_AUTHKEY" \
 		--hostname="$hostname" \
 		--advertise-tags="$tags" \
 		--accept-routes
-	rm -f "$keyfile"
-	trap - EXIT
 }
 
 write_env() {
 	mkdir -p "$INSTALL_DIR"
 	local env_file="$INSTALL_DIR/agent.env"
-	umask 077
-	{
-		echo "BACKEND_BOOTSTRAP_TOKEN=${BISESS_TOKEN}"
-		echo "DASHBOARD_URL=${DASHBOARD_URL}"
-		echo "BACKEND_ID=${BACKEND_ID}"
-	} >"$env_file"
+	# Scope the restrictive umask to a subshell so it does not persist into the
+	# rest of the installer; printf (not echo) so a token containing shell-special
+	# characters cannot corrupt the file.
+	(
+		umask 077
+		{
+			printf 'BACKEND_BOOTSTRAP_TOKEN=%s\n' "$BISESS_TOKEN"
+			printf 'DASHBOARD_URL=%s\n' "$DASHBOARD_URL"
+			printf 'BACKEND_ID=%s\n' "$BACKEND_ID"
+		} >"$env_file"
+	)
 	chmod 600 "$env_file"
 	log "wrote $env_file (0600)"
 }
@@ -125,15 +128,15 @@ compose_up() {
 	log "starting agent + socket-proxy"
 	(
 		cd "$INSTALL_DIR"
-		CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${REF}}" \
-			PR_AGENT_IMAGE="${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}" \
-			PR_AGENT_PLATFORM="${PR_AGENT_PLATFORM:-linux/amd64}" \
-			DASHBOARD_URL="$DASHBOARD_URL" \
-			BACKEND_ID="$BACKEND_ID" \
-			docker compose pull
-		CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${REF}}" \
-			DASHBOARD_URL="$DASHBOARD_URL" BACKEND_ID="$BACKEND_ID" \
-			docker compose up -d
+		# Export once so BOTH `pull` and `up` honor the image/platform overrides
+		# (previously `up` omitted PR_AGENT_IMAGE/PLATFORM, so an override applied
+		# only to the pull, not the running container).
+		export CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${REF}}"
+		export PR_AGENT_IMAGE="${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
+		export PR_AGENT_PLATFORM="${PR_AGENT_PLATFORM:-linux/amd64}"
+		export DASHBOARD_URL BACKEND_ID
+		docker compose pull
+		docker compose up -d
 	)
 }
 

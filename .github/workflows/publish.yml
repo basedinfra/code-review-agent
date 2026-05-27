@@ -8,6 +8,11 @@ on:
   push:
     tags: ['v*']
 
+# Cancel superseded PR builds; never cancel a tag (release) build mid-push.
+concurrency:
+  group: publish-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   publish:
     runs-on: ubuntu-latest

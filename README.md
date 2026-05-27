@@ -16,7 +16,7 @@ FROM ghcr.io/basedinfra/code-review-agent:v1
 
 ## How it works
 
-```
+```text
 BYO machine (network_mode: host)
   tailscale ──── joins via --login-server=https://headscale.<domain>:8443
   ┌─────────────────────────────────────────────────────────────┐
@@ -104,8 +104,11 @@ is the v1 trade-off (an owned multi-arch PR-Agent image is a future option).
   container down promptly is the dashboard's responsibility once it drives the
   review lifecycle (Sprint 5).
 - **Secrets via stdin/env.** The bootstrap token and Tailscale pre-auth key are
-  delivered via stdin/env (never argv, which is visible in `ps`); any on-disk
-  secret is mode `0600`.
+  delivered to the installer via stdin/env (never the installer's own argv); any
+  on-disk secret is mode `0600`. One unavoidable exception: `tailscale up` has no
+  non-argv way to accept its key, so the key is briefly visible in that child
+  process's argv — mitigated by single-use, ≤15-min pre-auth keys (already spent
+  or expired if observed).
 
 ## Tag scheme
 

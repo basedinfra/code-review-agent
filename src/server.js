@@ -104,7 +104,13 @@ export function createRequestListener({
 			}
 			const logsMatch = method === 'GET' && /^\/logs\/([^/]+)$/.exec(path);
 			if (logsMatch) {
-				const text = await reviews.logs(decodeURIComponent(logsMatch[1]), {
+				let reviewId;
+				try {
+					reviewId = decodeURIComponent(logsMatch[1]);
+				} catch {
+					throw new HttpStatusError(400, 'invalid review id');
+				}
+				const text = await reviews.logs(reviewId, {
 					tail: parseTail(url.searchParams.get('tail'))
 				});
 				res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });

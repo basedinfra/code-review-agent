@@ -13,6 +13,11 @@ on:
     - cron: '0 8 * * 1' # Mondays 08:00 UTC
   workflow_dispatch:
 
+# Never run two rebuilds at once (a scheduled run overlapping a manual dispatch).
+concurrency:
+  group: weekly-rebuild-${{ github.workflow }}
+  cancel-in-progress: false
+
 jobs:
   rebuild:
     runs-on: ubuntu-latest

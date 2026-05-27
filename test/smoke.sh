@@ -25,12 +25,14 @@ docker run -d --name "$NAME" \
 
 echo "==> waiting for /health (via the image healthcheck)"
 ok=''
-for _ in $(seq 1 30); do
+attempt=0
+while [ "$attempt" -lt 30 ]; do
 	if docker exec "$NAME" node src/healthcheck.js >/dev/null 2>&1; then
 		ok=1
 		break
 	fi
 	sleep 1
+	attempt=$((attempt + 1))
 done
 
 if [ -z "$ok" ]; then

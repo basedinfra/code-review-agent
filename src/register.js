@@ -25,7 +25,6 @@ export class FatalRegisterError extends Error {
 	}
 }
 
-const RETRIABLE = new Set([409, 429]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
@@ -122,15 +121,18 @@ export async function register({
 			log(`registered: backend ${json.backendId} → ${json.status}`);
 			return json;
 		}
-		if (res.status === 401 || res.status === 400) {
-			throw new FatalRegisterError(`register failed (${res.status}); re-pair required`);
+		// Retry ONLY genuinely transient statuses: 409 (tailnet node not visible
+		// yet — token NOT burned), 429 (rate-limited), and 5xx (server hiccup).
+		// Everything else (400/401/403/404, other 4xx) is fatal — retrying cannot
+		// help and only delays surfacing the failure.
+		if (res.status === 409 || res.status === 429 || res.status >= 500) {
+			lastErr = new Error(`register transient ${res.status}`);
+			const delay = backoffDelay(attempt, baseDelayMs, capDelayMs);
+			log(`attempt ${attempt + 1} → ${res.status}, retrying in ${delay}ms`);
+			await sleepImpl(delay);
+			continue;
 		}
-		lastErr = new Error(
-			`register ${RETRIABLE.has(res.status) ? 'transient' : 'unexpected'} ${res.status}`
-		);
-		const delay = backoffDelay(attempt, baseDelayMs, capDelayMs);
-		log(`attempt ${attempt + 1} → ${res.status}, retrying in ${delay}ms`);
-		await sleepImpl(delay);
+		throw new FatalRegisterError(`register failed (${res.status}); not retriable`);
 	}
 	throw new Error(`register exhausted ${maxAttempts} attempts: ${lastErr?.message ?? 'unknown'}`);
 }

@@ -16,8 +16,10 @@ const TAILNET_V6_PREFIX = 'fd7a:115c:a1e0:';
  */
 export function normalizeIp(ip) {
 	if (typeof ip !== 'string') return '';
-	const trimmed = ip.trim();
-	return trimmed.toLowerCase().startsWith('::ffff:') ? trimmed.slice(7) : trimmed;
+	// Lowercase the whole value (not just for the prefix test) so IPv6 tailnet
+	// comparisons in isTailnetIp are case-insensitive (e.g. FD7A:… == fd7a:…).
+	const lowered = ip.trim().toLowerCase();
+	return lowered.startsWith('::ffff:') ? lowered.slice(7) : lowered;
 }
 
 /**

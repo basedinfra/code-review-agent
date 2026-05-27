@@ -5,7 +5,7 @@
 // override (tests/dev use 127.0.0.1) or by auto-detecting the host's tailnet
 // interface. `index.js` refuses to start if neither yields a safe address.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import os from 'node:os';
 import { findTailnetIp } from './net.js';
 
@@ -34,10 +34,17 @@ function readPackageVersion() {
  * @returns {string | null}
  */
 function readBootstrapToken(env) {
-	if (env.BACKEND_BOOTSTRAP_TOKEN) return env.BACKEND_BOOTSTRAP_TOKEN.trim();
+	const fromEnv = env.BACKEND_BOOTSTRAP_TOKEN?.trim();
+	if (fromEnv) return fromEnv; // empty/whitespace-only → fall through to null
 	if (env.BISESS_TOKEN_FILE) {
 		try {
-			return readFileSync(env.BISESS_TOKEN_FILE, 'utf8').trim();
+			// Warn (don't hard-fail) if the token file is group/other-accessible.
+			if ((statSync(env.BISESS_TOKEN_FILE).mode & 0o077) !== 0) {
+				console.warn(
+					`[agent] WARNING: ${env.BISESS_TOKEN_FILE} is group/other-accessible; chmod 600 it.`
+				);
+			}
+			return readFileSync(env.BISESS_TOKEN_FILE, 'utf8').trim() || null;
 		} catch {
 			return null;
 		}
