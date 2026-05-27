@@ -165,13 +165,14 @@ wait_health() {
 	ip="$(tailscale ip -4 2>/dev/null | head -n1)"
 	[ -n "$ip" ] || die "no tailnet IPv4 assigned after tailscale up"
 	log "waiting for agent /health on ${ip}:${AGENT_PORT}"
-	local i
-	for i in $(seq 1 30); do
+	local attempt=0
+	while [ "$attempt" -lt 30 ]; do
 		if curl -fsS "http://${ip}:${AGENT_PORT}/health" >/dev/null 2>&1; then
 			log "agent healthy"
 			return
 		fi
 		sleep 2
+		attempt=$((attempt + 1))
 	done
 	die "agent /health did not come up; check: (cd $INSTALL_DIR && docker compose logs agent)"
 }
