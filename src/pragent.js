@@ -7,15 +7,14 @@
 // (`OPENAI.KEY`, `GITHUB.USER_TOKEN`, …) via dynaconf, matching the dashboard's
 // existing convention.
 
-// Map the RPC body's provider-key slots → PR-Agent env var names. This table is
-// the single place to adjust if PR-Agent's expected names change (e.g. its native
-// Gemini key is GOOGLE_AI_STUDIO.GEMINI_API_KEY; the dashboard contract sends it
-// as `gemini` → GEMINI.KEY — confirmed end-to-end in Sprint 5 against the real
-// image, validated against a mock in Sprint 4).
+// Map the RPC body's provider-key slots → PR-Agent env var names (dynaconf
+// dot-style). This table is the single place to adjust if PR-Agent's expected
+// names change. Gemini uses PR-Agent's Google-AI-Studio section
+// (GOOGLE_AI_STUDIO.GEMINI_API_KEY), not a bare GEMINI.KEY.
 export const PROVIDER_ENV = {
 	openai: 'OPENAI.KEY',
 	anthropic: 'ANTHROPIC.KEY',
-	gemini: 'GEMINI.KEY',
+	gemini: 'GOOGLE_AI_STUDIO.GEMINI_API_KEY',
 	github: 'GITHUB.USER_TOKEN'
 };
 

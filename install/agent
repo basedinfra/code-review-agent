@@ -89,6 +89,13 @@ ensure_tailscale() {
 	elif command -v brew >/dev/null 2>&1; then
 		log "installing Tailscale via Homebrew"
 		brew install tailscale
+		# Homebrew installs only the binaries — tailscaled must be started before
+		# `tailscale up` will work. (macOS host networking for the agent itself is a
+		# Phase-4 item; see README "Platform & networking".)
+		log "starting tailscaled (macOS)"
+		sudo tailscaled install-system-daemon 2>/dev/null ||
+			sudo brew services start tailscale 2>/dev/null ||
+			log "WARNING: could not auto-start tailscaled — start it manually, then re-run"
 	else
 		die "Tailscale not installed. On macOS install it from https://tailscale.com/download (the standalone launchd setup is Phase 2), then re-run."
 	fi
@@ -147,14 +154,18 @@ fetch_compose() {
 
 compose_up() {
 	log "starting agent + socket-proxy"
+	# Persist the compose interpolation vars to .env in the install dir so this
+	# run AND any later manual `docker compose up` from that dir resolve the same
+	# image/platform/port. (Exporting would apply only to this one invocation —
+	# Codex P2; compose auto-reads ./.env for interpolation.)
+	{
+		printf 'CODE_REVIEW_AGENT_IMAGE=%s\n' "${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${IMAGE_TAG}}"
+		printf 'PR_AGENT_IMAGE=%s\n' "${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
+		printf 'PR_AGENT_PLATFORM=%s\n' "${PR_AGENT_PLATFORM:-linux/amd64}"
+		printf 'AGENT_PORT=%s\n' "$AGENT_PORT"
+	} >"$INSTALL_DIR/.env"
 	(
 		cd "$INSTALL_DIR"
-		# Export the image/platform overrides so BOTH `pull` and `up` honor them
-		# (compose interpolates these). DASHBOARD_URL / BACKEND_ID / the token are
-		# NOT exported — they reach the container via the env_file (agent.env).
-		export CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${IMAGE_TAG}}"
-		export PR_AGENT_IMAGE="${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
-		export PR_AGENT_PLATFORM="${PR_AGENT_PLATFORM:-linux/amd64}"
 		docker compose pull
 		docker compose up -d
 	)
@@ -193,16 +204,20 @@ main() {
 	require_env LOGIN_SERVER
 	require_env DASHBOARD_URL
 
-	if [ -z "${TS_AUTHKEY:-}" ]; then
-		read -rsp 'Tailscale pre-auth key: ' TS_AUTHKEY && echo
+	# Prompt from the controlling terminal, NOT stdin: under the documented
+	# `curl ... | bash` install, stdin IS the script pipe, so a plain `read` would
+	# consume the script instead of the user's input. With no tty we fall through
+	# to the die below (set TS_AUTHKEY / BISESS_TOKEN for non-interactive installs).
+	if [ -z "${TS_AUTHKEY:-}" ] && [ -e /dev/tty ]; then
+		read -rsp 'Tailscale pre-auth key: ' TS_AUTHKEY </dev/tty && echo
 	fi
 	# Accept either name; the agent process reads it as BACKEND_BOOTSTRAP_TOKEN.
 	BISESS_TOKEN="${BISESS_TOKEN:-${BACKEND_BOOTSTRAP_TOKEN:-}}"
-	if [ -z "${BISESS_TOKEN:-}" ]; then
-		read -rsp 'Bootstrap token (bisess_…): ' BISESS_TOKEN && echo
+	if [ -z "${BISESS_TOKEN:-}" ] && [ -e /dev/tty ]; then
+		read -rsp 'Bootstrap token (bisess_…): ' BISESS_TOKEN </dev/tty && echo
 	fi
-	[ -n "$TS_AUTHKEY" ] || die "empty Tailscale pre-auth key"
-	[ -n "$BISESS_TOKEN" ] || die "empty bootstrap token"
+	[ -n "$TS_AUTHKEY" ] || die "no Tailscale pre-auth key (set TS_AUTHKEY for non-interactive / curl|bash installs)"
+	[ -n "$BISESS_TOKEN" ] || die "no bootstrap token (set BISESS_TOKEN or BACKEND_BOOTSTRAP_TOKEN for non-interactive installs)"
 
 	detect_platform
 	ensure_docker

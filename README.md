@@ -36,7 +36,7 @@ BYO machine (network_mode: host)
 The agent never touches the raw Docker socket — it speaks the Docker Engine API
 to a [`tecnativa/docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy)
 with a tight allowlist. Provider API keys (`OPENAI.KEY`, `ANTHROPIC.KEY`,
-`GEMINI.KEY`, `GITHUB.USER_TOKEN`) arrive **per-review in the RPC body** and are
+`GOOGLE_AI_STUDIO.GEMINI_API_KEY`, `GITHUB.USER_TOKEN`) arrive **per-review in the RPC body** and are
 passed to the ephemeral PR-Agent container as env — never persisted on the
 BYO machine.
 

@@ -16,7 +16,7 @@ test('buildPrAgentEnv emits dot-style keys, only for supplied values', () => {
 	assert.ok(env.includes('GITHUB.DEPLOYMENT_TYPE=user'));
 	assert.ok(env.includes('OPENAI.KEY=sk-o'));
 	assert.ok(env.includes('ANTHROPIC.KEY=sk-a'));
-	assert.ok(env.includes('GEMINI.KEY=g-key'));
+	assert.ok(env.includes('GOOGLE_AI_STUDIO.GEMINI_API_KEY=g-key'));
 	assert.ok(env.includes('GITHUB.USER_TOKEN=ghp_x'));
 });
 
@@ -28,7 +28,7 @@ test('buildPrAgentEnv omits absent providers and adds optional model/effort', ()
 	});
 	assert.ok(env.some((e) => e.startsWith('OPENAI.KEY=')));
 	assert.ok(!env.some((e) => e.startsWith('ANTHROPIC.KEY=')));
-	assert.ok(!env.some((e) => e.startsWith('GEMINI.KEY=')));
+	assert.ok(!env.some((e) => e.startsWith('GOOGLE_AI_STUDIO.GEMINI_API_KEY=')));
 	assert.ok(env.includes('CONFIG.MODEL=openai/gpt-x'));
 	assert.ok(env.includes('CONFIG.MODEL_TURBO=openai/gpt-x'));
 	assert.ok(env.includes('CONFIG.REASONING_EFFORT=high'));
