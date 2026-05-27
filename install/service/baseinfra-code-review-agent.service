@@ -26,7 +26,11 @@ User=__SERVICE_USER__
 # isn't split across argv by systemd's command-line parser.
 ExecStart=/usr/bin/env bash "__BOOT_SCRIPT__" "__INSTALL_DIR__"
 ExecStop=/bin/sh -c 'cd "$1" && docker compose stop' sh "__INSTALL_DIR__"
-TimeoutStartSec=300
+# Headroom: agent-boot.sh may spend up to DOCKER_WAIT_SECS + TAILSCALE_WAIT_SECS
+# (~300s) on readiness waits before `docker compose up -d`, so the start timeout
+# must exceed that plus image-pull time — otherwise systemd marks the oneshot
+# failed right as the readiness gate succeeds.
+TimeoutStartSec=900
 
 [Install]
 WantedBy=multi-user.target

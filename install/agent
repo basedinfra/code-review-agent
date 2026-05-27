@@ -316,6 +316,12 @@ xml_escape() {
 	printf '%s' "$s"
 }
 
+# Escape % for a systemd unit value: % starts a specifier (%i, %%, …), so a path
+# with a literal % must double it or `systemd-analyze verify` rejects the unit.
+systemd_pct_escape() {
+	printf '%s' "${1//%/%%}"
+}
+
 # Install the reboot-survival service: a launchd LaunchAgent (macOS) or a systemd
 # unit (Linux) that runs the stage-2 readiness wrapper (agent-boot.sh) at
 # login/boot. The wrapper is copied INTO the install dir so the installed service
@@ -378,7 +384,6 @@ install_service_linux() {
 	local tmpl="$INSTALL_DIR/${unit}"
 	local svc_user
 	svc_user="$(id -un)"
-	fetch_asset "install/service/${unit}" "$tmpl"
 	# Detect systemd as the INIT system, not just a systemctl binary: WSL images and
 	# containers often ship systemctl without booting systemd as PID 1, where
 	# `systemctl enable` fails with "System has not been booted with systemd". The
@@ -395,14 +400,25 @@ install_service_linux() {
 		fi
 		return
 	fi
+	# Fetch only after the probe so a non-systemd host neither pulls the template nor
+	# leaves it behind, and the dry-run transcript stays clean on a skip.
+	fetch_asset "install/service/${unit}" "$tmpl"
 	if [ "$DRY_RUN" = '1' ]; then
 		log_dry "render systemd unit -> $unit_path (User=$svc_user), then: systemctl daemon-reload; systemctl enable --now $unit"
 		return
 	fi
-	render_template "$tmpl" "BOOT_SCRIPT=$boot_dest" "INSTALL_DIR=$INSTALL_DIR" "SERVICE_USER=$svc_user" | ts_sudo tee "$unit_path" >/dev/null
+	# Escape % (systemd's specifier char) so a path with a literal % isn't expanded.
+	render_template "$tmpl" \
+		"BOOT_SCRIPT=$(systemd_pct_escape "$boot_dest")" \
+		"INSTALL_DIR=$(systemd_pct_escape "$INSTALL_DIR")" \
+		"SERVICE_USER=$(systemd_pct_escape "$svc_user")" | ts_sudo tee "$unit_path" >/dev/null
 	rm -f "$tmpl" # the installed $unit_path is authoritative; drop the intermediate template
-	ts_sudo systemctl daemon-reload
-	ts_sudo systemctl enable --now "$unit"
+	# Like the macOS launchctl path, a systemctl failure must NOT abort the installer
+	# (the agent is already registered) — warn with manual recovery instead.
+	if ! ts_sudo systemctl daemon-reload || ! ts_sudo systemctl enable --now "$unit"; then
+		log "WARNING: systemctl enable failed; the agent is installed + registered but won't auto-start on reboot. Recover manually: sudo systemctl daemon-reload && sudo systemctl enable --now $unit"
+		return 0
+	fi
 	log "installed systemd unit: $unit_path"
 }
 

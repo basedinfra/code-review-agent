@@ -5,7 +5,7 @@
   A per-user LaunchAgent, NOT a system LaunchDaemon: on macOS the Docker engine
   (Docker Desktop / OrbStack) runs inside the logged-in user's session, so a
   root boot-time daemon could never reach it. RunAtLoad fires this at login; it
-  execs the stage-2 readiness wrapper (__BOOT_SCRIPT__), which waits for Docker +
+  execs the stage-2 readiness wrapper (agent-boot.sh), which waits for Docker +
   tailscale and then `docker compose up -d`. KeepAlive is false — the wrapper is
   a one-shot bring-up that exits after `up -d`; per-container liveness is Docker's
   own `restart: unless-stopped`. The installer renders the placeholders below.

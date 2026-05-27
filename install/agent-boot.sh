@@ -30,6 +30,10 @@ INSTALL_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # Bounded waits so a never-ready engine fails the unit instead of hanging forever.
 DOCKER_WAIT_SECS="${DOCKER_WAIT_SECS:-180}"
 TAILSCALE_WAIT_SECS="${TAILSCALE_WAIT_SECS:-120}"
+# Guard against a non-numeric override — bare arithmetic on it under `set -e`
+# would abort the wrapper. Fall back to the default unless it's all digits.
+[[ "$DOCKER_WAIT_SECS" =~ ^[0-9]+$ ]] || DOCKER_WAIT_SECS=180
+[[ "$TAILSCALE_WAIT_SECS" =~ ^[0-9]+$ ]] || TAILSCALE_WAIT_SECS=120
 
 log() { printf '%s agent-boot: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*"; }
 die() { printf '%s agent-boot ERROR: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >&2; exit 1; }
