@@ -24,7 +24,7 @@ set -euo pipefail
 # launchd/systemd hand us a minimal PATH that omits where the docker + tailscale
 # CLIs usually live (Homebrew, /usr/local). Prepend the usual locations so they
 # resolve regardless of how the engine was installed.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
 
 INSTALL_DIR="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 # Bounded waits so a never-ready engine fails the unit instead of hanging forever.
@@ -39,8 +39,10 @@ die() { printf '%s agent-boot ERROR: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >
 wait_for_docker() {
 	command -v docker >/dev/null 2>&1 || die "docker not on PATH ($PATH)"
 	local waited=0
-	until docker info >/dev/null 2>&1; do
-		[ "$waited" -lt "$DOCKER_WAIT_SECS" ] || die "Docker engine not ready after ${DOCKER_WAIT_SECS}s"
+	while ! docker info >/dev/null 2>&1; do
+		if [ "$waited" -ge "$DOCKER_WAIT_SECS" ]; then
+			die "Docker engine not ready after ${DOCKER_WAIT_SECS}s"
+		fi
 		sleep 3
 		waited=$((waited + 3))
 	done
@@ -70,7 +72,11 @@ wait_for_tailscale() {
 }
 
 main() {
+	# Fail fast (before any docker call) on a broken install dir. compose.yml is
+	# checked first so the existing "missing compose file" test still trips here.
 	[ -f "$INSTALL_DIR/docker-compose.yml" ] || die "no docker-compose.yml in $INSTALL_DIR"
+	[ -f "$INSTALL_DIR/agent.env" ] || die "no agent.env in $INSTALL_DIR (re-run the installer or restore it)"
+	[ -f "$INSTALL_DIR/.env" ] || die "no .env in $INSTALL_DIR (re-run the installer or restore it)"
 	log "bringing up the code-review agent from $INSTALL_DIR"
 	wait_for_docker
 	wait_for_tailscale

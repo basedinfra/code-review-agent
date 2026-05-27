@@ -18,6 +18,26 @@ import { fileURLToPath } from 'node:url';
 
 const installer = fileURLToPath(new URL('../install/agent', import.meta.url));
 const bootScript = fileURLToPath(new URL('../install/agent-boot.sh', import.meta.url));
+const serviceTmpl = fileURLToPath(
+	new URL('../install/service/baseinfra-code-review-agent.service', import.meta.url)
+);
+const plistTmpl = fileURLToPath(
+	new URL('../install/service/com.baseinfra.code-review-agent.plist', import.meta.url)
+);
+
+// Render a template through the installer's OWN render_template (sourced, so
+// main() doesn't run and no privileged command is invoked) — the exact code path
+// a real install uses. `pairs` are KEY=VALUE strings.
+function renderTemplate(tmpl, pairs) {
+	const quoted = pairs.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
+	return execFileSync(
+		'bash',
+		['-c', `source '${installer}'; render_template '${tmpl}' ${quoted}`],
+		{
+			encoding: 'utf8'
+		}
+	);
+}
 
 // Run a script under bash, returning { status, stdout, stderr }. Never throws on
 // a non-zero exit (we assert on the code), so both success and failure paths read
@@ -111,4 +131,37 @@ test('agent-boot.sh refuses a dir with no docker-compose.yml (before any docker 
 	const { status, stderr } = runScript(bootScript, [join(tmpdir(), 'cr-agent-nonexistent-dir')]);
 	assert.notEqual(status, 0);
 	assert.match(stderr, /no docker-compose\.yml/);
+});
+
+// A path with spaces (a legal INSTALL_DIR override) is the case the old sed-based
+// rendering broke — argv-splitting in the systemd unit, sed metachar breakage.
+const SPACED_DIR = '/opt/my agent/dir';
+
+test('render_template fills the systemd unit with quoted, space-safe paths', () => {
+	const out = renderTemplate(serviceTmpl, [
+		`BOOT_SCRIPT=${SPACED_DIR}/agent-boot.sh`,
+		`INSTALL_DIR=${SPACED_DIR}`,
+		'SERVICE_USER=op'
+	]);
+	assert.doesNotMatch(out, /__[A-Z_]+__/, 'no placeholder tokens may remain');
+	// Paths are quoted so systemd does not split the spaced dir across argv.
+	assert.match(
+		out,
+		/ExecStart=\/usr\/bin\/env bash "\/opt\/my agent\/dir\/agent-boot\.sh" "\/opt\/my agent\/dir"/
+	);
+	assert.match(out, /ExecStop=\/bin\/sh -c 'cd "\/opt\/my agent\/dir" && docker compose stop'/);
+	assert.match(out, /^User=op$/m);
+});
+
+test('render_template fills the launchd plist and leaves no placeholders', () => {
+	const out = renderTemplate(plistTmpl, [
+		`BOOT_SCRIPT=${SPACED_DIR}/agent-boot.sh`,
+		`INSTALL_DIR=${SPACED_DIR}`,
+		`LOG_FILE=${SPACED_DIR}/agent-boot.log`
+	]);
+	assert.doesNotMatch(out, /__[A-Z_]+__/, 'no placeholder tokens may remain');
+	// The plist passes each arg as its own <string>, so the spaced dir is safe.
+	assert.match(out, /<string>\/usr\/bin\/env<\/string>/);
+	assert.match(out, /<string>\/opt\/my agent\/dir\/agent-boot\.sh<\/string>/);
+	assert.match(out, /<string>\/opt\/my agent\/dir<\/string>/);
 });

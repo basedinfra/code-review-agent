@@ -283,6 +283,23 @@ do_register() {
 	esac
 }
 
+# Render a template file's __KEY__ placeholders to stdout. Each extra arg is a
+# KEY=VALUE pair (KEY is matched as __KEY__). Uses bash string replacement, NOT
+# sed — so VALUE may safely contain any path metacharacter (spaces, & # $ " \),
+# which a user-supplied INSTALL_DIR can. Callers redirect stdout to the dest.
+render_template() {
+	local tmpl="$1"
+	shift
+	local content pair key val
+	content="$(cat "$tmpl")"
+	for pair in "$@"; do
+		key="${pair%%=*}"
+		val="${pair#*=}"
+		content="${content//__${key}__/$val}"
+	done
+	printf '%s\n' "$content"
+}
+
 # Install the reboot-survival service: a launchd LaunchAgent (macOS) or a systemd
 # unit (Linux) that runs the stage-2 readiness wrapper (agent-boot.sh) at
 # login/boot. The wrapper is copied INTO the install dir so the installed service
@@ -317,14 +334,17 @@ install_service_macos() {
 		return
 	fi
 	mkdir -p "$HOME/Library/LaunchAgents"
-	sed -e "s#__BOOT_SCRIPT__#${boot_dest}#g" \
-		-e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
-		-e "s#__LOG_FILE__#${log_file}#g" \
-		"$tmpl" >"$plist"
+	render_template "$tmpl" "BOOT_SCRIPT=$boot_dest" "INSTALL_DIR=$INSTALL_DIR" "LOG_FILE=$log_file" >"$plist"
+	rm -f "$tmpl" # the rendered $plist is authoritative; drop the intermediate template
 	# Reload cleanly: bootout an existing instance (ignore "not loaded"), bootstrap
-	# the new one, and enable it so it survives reboots.
+	# the new one, and enable it so it survives reboots. A bootstrap failure must
+	# NOT abort the installer (the agent is already registered) — warn with the
+	# manual command instead of dying under `set -e`.
 	launchctl bootout "gui/${uid}/${label}" 2>/dev/null || true
-	launchctl bootstrap "gui/${uid}" "$plist"
+	if ! launchctl bootstrap "gui/${uid}" "$plist"; then
+		log "WARNING: launchctl bootstrap failed; the agent is installed + registered but won't auto-start on reboot. Load it manually: launchctl bootstrap gui/${uid} \"$plist\""
+		return 0
+	fi
 	launchctl enable "gui/${uid}/${label}" 2>/dev/null || true
 	log "installed LaunchAgent: $plist (logs: $log_file)"
 }
@@ -353,10 +373,8 @@ install_service_linux() {
 		log_dry "render systemd unit -> $unit_path (User=$svc_user), then: systemctl daemon-reload; systemctl enable --now $unit"
 		return
 	fi
-	sed -e "s#__BOOT_SCRIPT__#${boot_dest}#g" \
-		-e "s#__INSTALL_DIR__#${INSTALL_DIR}#g" \
-		-e "s#__SERVICE_USER__#${svc_user}#g" \
-		"$tmpl" | ts_sudo tee "$unit_path" >/dev/null
+	render_template "$tmpl" "BOOT_SCRIPT=$boot_dest" "INSTALL_DIR=$INSTALL_DIR" "SERVICE_USER=$svc_user" | ts_sudo tee "$unit_path" >/dev/null
+	rm -f "$tmpl" # the installed $unit_path is authoritative; drop the intermediate template
 	ts_sudo systemctl daemon-reload
 	ts_sudo systemctl enable --now "$unit"
 	log "installed systemd unit: $unit_path"
@@ -402,17 +420,22 @@ main() {
 	log "done. Reviews run on demand via the tailnet."
 }
 
-while [ $# -gt 0 ]; do
-	case "$1" in
-		--dry-run) DRY_RUN=1 ;;
-		--no-service) INSTALL_SERVICE=0 ;;
-		-h | --help)
-			usage
-			exit 0
-			;;
-		*) die "unknown argument: $1 (try --help)" ;;
-	esac
-	shift
-done
+# Run only when executed (incl. `curl … | bash`), NOT when sourced — the test
+# suite sources this file to unit-test render_template() without running the
+# installer. `(return)` succeeds only in a sourced context.
+if ! (return 0 2>/dev/null); then
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--dry-run) DRY_RUN=1 ;;
+			--no-service) INSTALL_SERVICE=0 ;;
+			-h | --help)
+				usage
+				exit 0
+				;;
+			*) die "unknown argument: $1 (try --help)" ;;
+		esac
+		shift
+	done
 
-main
+	main
+fi

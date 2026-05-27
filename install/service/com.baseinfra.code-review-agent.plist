@@ -8,7 +8,7 @@
   execs the stage-2 readiness wrapper (__BOOT_SCRIPT__), which waits for Docker +
   tailscale and then `docker compose up -d`. KeepAlive is false — the wrapper is
   a one-shot bring-up that exits after `up -d`; per-container liveness is Docker's
-  own `restart: unless-stopped`. The installer renders the __PLACEHOLDERS__.
+  own `restart: unless-stopped`. The installer renders the placeholders below.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -17,7 +17,8 @@
 	<string>com.baseinfra.code-review-agent</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/bin/bash</string>
+		<string>/usr/bin/env</string>
+		<string>bash</string>
 		<string>__BOOT_SCRIPT__</string>
 		<string>__INSTALL_DIR__</string>
 	</array>

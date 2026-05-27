@@ -5,7 +5,7 @@
 # and exited 0. Ordering: After/Wants docker.service so the engine is up first,
 # network-online so tailscale can hand out an address. Per-container liveness
 # after bring-up is Docker's `restart: unless-stopped`, not systemd's. The
-# installer renders the __PLACEHOLDERS__, installs this to /etc/systemd/system,
+# installer renders the placeholders below, installs this to /etc/systemd/system,
 # then `systemctl enable --now`.
 
 [Unit]
@@ -19,8 +19,11 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 User=__SERVICE_USER__
-ExecStart=/bin/bash __BOOT_SCRIPT__ __INSTALL_DIR__
-ExecStop=/bin/sh -c 'cd __INSTALL_DIR__ && docker compose stop'
+# /usr/bin/env bash (not /bin/bash): some systemd distros (NixOS, Alpine, minimal
+# containers) have no /bin/bash. Paths are quoted so an INSTALL_DIR with spaces
+# isn't split across argv by systemd's command-line parser.
+ExecStart=/usr/bin/env bash "__BOOT_SCRIPT__" "__INSTALL_DIR__"
+ExecStop=/bin/sh -c 'cd "__INSTALL_DIR__" && docker compose stop'
 TimeoutStartSec=300
 
 [Install]
