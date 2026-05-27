@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# BaseInfra BYO code-review agent installer (Sprint 4 Phase 0 baseline).
+#
+# Detects OS/arch, installs Tailscale, joins the tailnet, brings up the agent +
+# socket-proxy via docker compose, waits for /health, and runs the one-shot
+# register. launchd/systemd service templates and a --dry-run mode are Phase 2.
+#
+# SECRETS: the bootstrap token and the Tailscale pre-auth key are read from env
+# or prompted on stdin — never passed as argv (which is visible in `ps`). The
+# bootstrap token is written to a 0600 env-file.
+#
+# Required env:
+#   BACKEND_ID     code_review_backends row id (advertised as tag:backend-<id>)
+#   LOGIN_SERVER   https://headscale.<domain>:8443
+#   DASHBOARD_URL  https://dashboard.<domain>
+# Optional env:
+#   TS_AUTHKEY              Tailscale pre-auth key (else prompted)
+#   BISESS_TOKEN           bootstrap token (else prompted)
+#   AGENT_HOSTNAME         tailnet hostname (default: code-review-<BACKEND_ID>)
+#   INSTALL_DIR            default: $HOME/.baseinfra/code-review-agent
+#   REF                    git ref for fetching compose (default: main)
+#   IMAGE_TAG              docker image tag (default: v1)
+#   CODE_REVIEW_AGENT_IMAGE, PR_AGENT_IMAGE, PR_AGENT_PLATFORM
+#
+# NETWORKING (Phase 4): the agent uses `network_mode: host` to bind the host's
+# tailnet IP. That works on Linux and OrbStack; native macOS Docker Desktop
+# mediates host networking through its VM and cannot bind the host tailscale
+# interface, so the production macOS networking model (OrbStack, or tailscale in
+# a sidecar) is validated in Sprint 4 Phase 4. See README "Security model".
+set -euo pipefail
+
+REPO_RAW='https://raw.githubusercontent.com/basedinfra/code-review-agent'
+# Git ref for fetching docker-compose.yml (a real branch/tag) — distinct from the
+# Docker image tag, which is published as :v1 from a SemVer git tag (e.g. v1.0.0);
+# there is no git ref named "v1". Pin REF to a release tag for reproducibility.
+REF="${REF:-main}"
+IMAGE_TAG="${IMAGE_TAG:-v1}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.baseinfra/code-review-agent}"
+AGENT_PORT="${AGENT_PORT:-7777}"
+
+log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Tailscale state changes (`up`) require root on Linux AND on the macOS Homebrew
+# install; prefix with sudo whenever we are not already root.
+ts_sudo() {
+	if [ "$(id -u)" -ne 0 ]; then
+		sudo "$@"
+	else
+		"$@"
+	fi
+}
+
+require_env() {
+	local name="$1"
+	[ -n "${!name:-}" ] || die "missing required env: $name"
+}
+
+detect_platform() {
+	local os arch
+	os="$(uname -s)"
+	arch="$(uname -m)"
+	case "$os" in
+		Darwin) OS='darwin' ;;
+		Linux) OS='linux' ;;
+		*) die "unsupported OS: $os (need Darwin or Linux)" ;;
+	esac
+	case "$arch" in
+		arm64 | aarch64) ARCH='arm64' ;;
+		x86_64 | amd64) ARCH='x86_64' ;;
+		*) die "unsupported arch: $arch (need arm64 or x86_64)" ;;
+	esac
+	log "platform: $OS/$ARCH"
+}
+
+ensure_docker() {
+	command -v docker >/dev/null 2>&1 || die "docker not found — install Docker (Desktop/OrbStack/Engine) first"
+	docker compose version >/dev/null 2>&1 || die "docker compose v2 not found"
+}
+
+ensure_tailscale() {
+	if ! command -v tailscale >/dev/null 2>&1; then
+		if [ "$OS" = 'linux' ]; then
+			log "installing Tailscale (official script)"
+			curl -fsSL https://tailscale.com/install.sh | sh
+		elif command -v brew >/dev/null 2>&1; then
+			log "installing Tailscale via Homebrew"
+			brew install tailscale
+		else
+			die "Tailscale not installed. On macOS install it from https://tailscale.com/download, then re-run."
+		fi
+	else
+		log "tailscale already installed"
+	fi
+	# macOS: ensure tailscaled is running before `tailscale up`. Homebrew installs
+	# it stopped, and an existing CLI install may also have a stopped daemon — so
+	# this runs on BOTH the fresh-install and already-installed paths. Best-effort.
+	# (macOS host networking for the agent itself is a Phase-4 item — see README.)
+	if [ "$OS" = 'darwin' ]; then
+		log "ensuring tailscaled is running (macOS)"
+		sudo tailscaled install-system-daemon 2>/dev/null ||
+			sudo brew services start tailscale 2>/dev/null ||
+			log "WARNING: could not auto-start tailscaled — start it manually, then re-run"
+	fi
+}
+
+tailscale_up() {
+	local hostname="${AGENT_HOSTNAME:-code-review-${BACKEND_ID}}"
+	local tags="tag:backend-${BACKEND_ID},tag:baseinfra-agent"
+	log "joining tailnet via ${LOGIN_SERVER} as ${hostname} (${tags})"
+	# NOTE: `tailscale up` has NO non-argv way to supply the key — no stdin, env,
+	# or file: input (verified against the Tailscale CLI docs; only `tailscale
+	# login` honors file:). The key is therefore briefly visible in this child
+	# process's argv via `ps` during the join. The mitigation is single-use,
+	# <=15-min pre-auth keys (the dashboard clamps them), so a key seen in argv is
+	# already spent/expired. The installer itself never takes the key as argv — it
+	# is read via stdin/env (see main()).
+	ts_sudo tailscale up \
+		--login-server="$LOGIN_SERVER" \
+		--authkey="$TS_AUTHKEY" \
+		--hostname="$hostname" \
+		--advertise-tags="$tags" \
+		--accept-routes
+}
+
+write_env() {
+	mkdir -p "$INSTALL_DIR"
+	local env_file="$INSTALL_DIR/agent.env"
+	# Scope the restrictive umask to a subshell so it does not persist into the
+	# rest of the installer; printf (not echo) so a token containing shell-special
+	# characters cannot corrupt the file.
+	(
+		umask 077
+		{
+			printf 'BACKEND_BOOTSTRAP_TOKEN=%s\n' "$BISESS_TOKEN"
+			printf 'DASHBOARD_URL=%s\n' "$DASHBOARD_URL"
+			printf 'BACKEND_ID=%s\n' "$BACKEND_ID"
+		} >"$env_file"
+	)
+	chmod 600 "$env_file"
+	log "wrote $env_file (0600)"
+}
+
+fetch_compose() {
+	local dest="$INSTALL_DIR/docker-compose.yml"
+	# Default: always fetch the pinned compose file. A stray ./docker-compose.yml
+	# in the user's cwd (when run via curl|bash) must NOT be picked up — only
+	# honor a local file under an explicit DEV_LOCAL_COMPOSE=1 opt-in.
+	if [ "${DEV_LOCAL_COMPOSE:-}" = "1" ] && [ -f ./docker-compose.yml ]; then
+		log "using local ./docker-compose.yml (DEV_LOCAL_COMPOSE=1)"
+		cp ./docker-compose.yml "$dest"
+	else
+		log "fetching docker-compose.yml @ ${REF}"
+		curl -fsSL "${REPO_RAW}/${REF}/docker-compose.yml" -o "$dest"
+	fi
+}
+
+compose_up() {
+	log "starting agent + socket-proxy"
+	# Persist the compose interpolation vars to .env in the install dir so this
+	# run AND any later manual `docker compose up` from that dir resolve the same
+	# image/platform/port. (Exporting would apply only to this one invocation —
+	# Codex P2; compose auto-reads ./.env for interpolation.)
+	{
+		printf 'CODE_REVIEW_AGENT_IMAGE=%s\n' "${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${IMAGE_TAG}}"
+		printf 'PR_AGENT_IMAGE=%s\n' "${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
+		printf 'PR_AGENT_PLATFORM=%s\n' "${PR_AGENT_PLATFORM:-linux/amd64}"
+		printf 'AGENT_PORT=%s\n' "$AGENT_PORT"
+	} >"$INSTALL_DIR/.env"
+	(
+		cd "$INSTALL_DIR"
+		docker compose pull
+		docker compose up -d
+	)
+}
+
+wait_health() {
+	local ip
+	ip="$(tailscale ip -4 2>/dev/null | head -n1)"
+	[ -n "$ip" ] || die "no tailnet IPv4 assigned after tailscale up"
+	log "waiting for agent /health on ${ip}:${AGENT_PORT}"
+	local attempt=0
+	while [ "$attempt" -lt 30 ]; do
+		if curl -fsS "http://${ip}:${AGENT_PORT}/health" >/dev/null 2>&1; then
+			log "agent healthy"
+			return
+		fi
+		sleep 2
+		attempt=$((attempt + 1))
+	done
+	die "agent /health did not come up; check: (cd $INSTALL_DIR && docker compose logs agent)"
+}
+
+do_register() {
+	log "registering with the dashboard"
+	local code=0
+	(cd "$INSTALL_DIR" && docker compose exec -T agent node src/register.js) || code=$?
+	case "$code" in
+		0) log "registered — backend should now show 'connected'" ;;
+		2) die "registration rejected (bad/expired token); re-pair from the dashboard" ;;
+		*) die "registration did not complete; retry: (cd $INSTALL_DIR && docker compose exec -T agent node src/register.js)" ;;
+	esac
+}
+
+main() {
+	require_env BACKEND_ID
+	require_env LOGIN_SERVER
+	require_env DASHBOARD_URL
+
+	# Prompt from the controlling terminal, NOT stdin: under the documented
+	# `curl ... | bash` install, stdin IS the script pipe, so a plain `read` would
+	# consume the script instead of the user's input. With no tty we fall through
+	# to the die below (set TS_AUTHKEY / BISESS_TOKEN for non-interactive installs).
+	if [ -z "${TS_AUTHKEY:-}" ] && [ -e /dev/tty ]; then
+		read -rsp 'Tailscale pre-auth key: ' TS_AUTHKEY </dev/tty && echo
+	fi
+	# Accept either name; the agent process reads it as BACKEND_BOOTSTRAP_TOKEN.
+	BISESS_TOKEN="${BISESS_TOKEN:-${BACKEND_BOOTSTRAP_TOKEN:-}}"
+	if [ -z "${BISESS_TOKEN:-}" ] && [ -e /dev/tty ]; then
+		read -rsp 'Bootstrap token (bisess_…): ' BISESS_TOKEN </dev/tty && echo
+	fi
+	[ -n "$TS_AUTHKEY" ] || die "no Tailscale pre-auth key (set TS_AUTHKEY for non-interactive / curl|bash installs)"
+	[ -n "$BISESS_TOKEN" ] || die "no bootstrap token (set BISESS_TOKEN or BACKEND_BOOTSTRAP_TOKEN for non-interactive installs)"
+
+	detect_platform
+	ensure_docker
+	ensure_tailscale
+	tailscale_up
+	write_env
+	fetch_compose
+	compose_up
+	wait_health
+	do_register
+	log "done. Reviews run on demand via the tailnet."
+}
+
+main "$@"

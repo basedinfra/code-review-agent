@@ -1,0 +1,40 @@
+name: CI
+
+# Lint, unit-test, and shellcheck on every push + PR. The image build + smoke
+# test live in publish.yml (which also runs on PRs).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded CI runs on the same ref (e.g. a new push to a PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Shellcheck
+        run: shellcheck install/agent test/smoke.sh
