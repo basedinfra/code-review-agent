@@ -149,13 +149,12 @@ compose_up() {
 	log "starting agent + socket-proxy"
 	(
 		cd "$INSTALL_DIR"
-		# Export once so BOTH `pull` and `up` honor the image/platform overrides
-		# (previously `up` omitted PR_AGENT_IMAGE/PLATFORM, so an override applied
-		# only to the pull, not the running container).
+		# Export the image/platform overrides so BOTH `pull` and `up` honor them
+		# (compose interpolates these). DASHBOARD_URL / BACKEND_ID / the token are
+		# NOT exported — they reach the container via the env_file (agent.env).
 		export CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${IMAGE_TAG}}"
 		export PR_AGENT_IMAGE="${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
 		export PR_AGENT_PLATFORM="${PR_AGENT_PLATFORM:-linux/amd64}"
-		export DASHBOARD_URL BACKEND_ID
 		docker compose pull
 		docker compose up -d
 	)

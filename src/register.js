@@ -84,6 +84,7 @@ export async function register({
 	maxAttempts = 8,
 	baseDelayMs = 1000,
 	capDelayMs = 30000,
+	requestTimeoutMs = 30000,
 	fetchImpl = fetch,
 	sleepImpl = sleep,
 	log = () => {}
@@ -107,7 +108,11 @@ export async function register({
 					Authorization: `Bearer ${token}`,
 					'Content-Type': 'application/json'
 				},
-				body: JSON.stringify(body)
+				body: JSON.stringify(body),
+				// Bound each attempt so a dashboard that accepts the connection but
+				// stalls the response can't hang the install-time register forever;
+				// a timeout aborts → caught below as a transient error → retried.
+				signal: AbortSignal.timeout(requestTimeoutMs)
 			});
 		} catch (e) {
 			lastErr = e;

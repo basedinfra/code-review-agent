@@ -13,6 +13,10 @@ import http from 'node:http';
 const DEFAULT_OP_TIMEOUT_MS = 30_000;
 const DEFAULT_PULL_TIMEOUT_MS = 600_000;
 const DEFAULT_LOG_MAX_BYTES = 16 * 1024 * 1024;
+// Pull progress is a JSONL stream that can legitimately exceed the log cap on a
+// big multi-layer image, so it gets its own much larger safety ceiling (the
+// stream still terminates when the pull completes).
+const DEFAULT_PULL_MAX_BYTES = 256 * 1024 * 1024;
 
 export class DockerError extends Error {
 	/**
@@ -217,7 +221,7 @@ export class DockerClient {
 		if (platform) qs.set('platform', platform);
 		const res = await this._raw('POST', `/images/create?${qs}`, {
 			signal,
-			maxBytes: DEFAULT_LOG_MAX_BYTES
+			maxBytes: DEFAULT_PULL_MAX_BYTES
 		});
 		const text = res.body.toString('utf8');
 		if (res.status >= 400)

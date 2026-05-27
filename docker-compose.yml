@@ -17,13 +17,13 @@ services:
     environment:
       DOCKER_HOST: tcp://127.0.0.1:2375
       PORT: ${AGENT_PORT:-7777}
-      DASHBOARD_URL: ${DASHBOARD_URL:?set DASHBOARD_URL}
-      BACKEND_ID: ${BACKEND_ID:-}
       MAX_CONCURRENT_REVIEWS: ${MAX_CONCURRENT_REVIEWS:-3}
       PR_AGENT_IMAGE: ${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}
       PR_AGENT_PLATFORM: ${PR_AGENT_PLATFORM:-linux/amd64}
-    # The bootstrap token (BACKEND_BOOTSTRAP_TOKEN) lives in a 0600 env-file the
-    # installer writes — kept out of argv and this committed file. See agent.env.example.
+    # DASHBOARD_URL, BACKEND_ID, and the BACKEND_BOOTSTRAP_TOKEN come from the
+    # 0600 env-file the installer writes (agent.env). env_file populates the
+    # container env directly, so they need no compose-interpolation source — and
+    # `docker compose up` from the install dir works without exporting them.
     env_file:
       - ${AGENT_ENV_FILE:-./agent.env}
     depends_on:
