@@ -11,9 +11,11 @@
 [Unit]
 Description=BaseInfra code-review agent (docker compose stack)
 Documentation=https://github.com/basedinfra/code-review-agent
+# Soft dependency only (Wants/After, NOT Requires): a `systemctl restart docker`
+# must not propagate a stop to this unit — that would run ExecStop and mark the
+# containers manually stopped, defeating Docker's own `restart: unless-stopped`.
 Wants=docker.service network-online.target
 After=docker.service network-online.target tailscaled.service
-Requires=docker.service
 
 [Service]
 Type=oneshot

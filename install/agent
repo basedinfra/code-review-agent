@@ -379,11 +379,15 @@ install_service_linux() {
 	local svc_user
 	svc_user="$(id -un)"
 	fetch_asset "install/service/${unit}" "$tmpl"
-	if ! command -v systemctl >/dev/null 2>&1; then
-		# No systemd (Alpine/OpenRC, WSL without systemd, …): skip in BOTH modes —
-		# the operator starts the wrapper from their own init system. Keep the
-		# message dry-run-aware so a preview on a non-systemd host reads honestly.
-		local msg="systemctl not found; skipping service install (start manually: bash \"$boot_dest\" \"$INSTALL_DIR\")"
+	# Detect systemd as the INIT system, not just a systemctl binary: WSL images and
+	# containers often ship systemctl without booting systemd as PID 1, where
+	# `systemctl enable` fails with "System has not been booted with systemd". The
+	# /run/systemd/system dir is systemd's own sd_booted() probe.
+	if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+		# No systemd init (Alpine/OpenRC, WSL/containers without systemd): skip in
+		# BOTH modes — the operator starts the wrapper from their own init system.
+		# Keep the message dry-run-aware so a preview reads honestly.
+		local msg="systemd not available; skipping service install (start manually: bash \"$boot_dest\" \"$INSTALL_DIR\")"
 		if [ "$DRY_RUN" = '1' ]; then
 			log_dry "$msg"
 		else
