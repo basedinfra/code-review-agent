@@ -23,7 +23,7 @@ User=__SERVICE_USER__
 # containers) have no /bin/bash. Paths are quoted so an INSTALL_DIR with spaces
 # isn't split across argv by systemd's command-line parser.
 ExecStart=/usr/bin/env bash "__BOOT_SCRIPT__" "__INSTALL_DIR__"
-ExecStop=/bin/sh -c 'cd "__INSTALL_DIR__" && docker compose stop'
+ExecStop=/bin/sh -c 'cd "$1" && docker compose stop' sh "__INSTALL_DIR__"
 TimeoutStartSec=300
 
 [Install]

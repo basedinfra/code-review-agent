@@ -168,7 +168,12 @@ test('render_template fills the systemd unit with quoted, space-safe paths', () 
 		out,
 		/ExecStart=\/usr\/bin\/env bash "\/opt\/my agent\/dir\/agent-boot\.sh" "\/opt\/my agent\/dir"/
 	);
-	assert.match(out, /ExecStop=\/bin\/sh -c 'cd "\/opt\/my agent\/dir" && docker compose stop'/);
+	// ExecStop passes the dir as a positional ($1) so a path with a literal ' can't
+	// break the single-quoted sh snippet; the path rides in a separate quoted argv.
+	assert.match(
+		out,
+		/ExecStop=\/bin\/sh -c 'cd "\$1" && docker compose stop' sh "\/opt\/my agent\/dir"/
+	);
 	assert.match(out, /^User=op$/m);
 });
 
@@ -183,4 +188,26 @@ test('render_template fills the launchd plist and leaves no placeholders', () =>
 	assert.match(out, /<string>\/usr\/bin\/env<\/string>/);
 	assert.match(out, /<string>\/opt\/my agent\/dir\/agent-boot\.sh<\/string>/);
 	assert.match(out, /<string>\/opt\/my agent\/dir<\/string>/);
+});
+
+test('xml_escape encodes XML metacharacters for plist text nodes', () => {
+	const out = execFileSync('bash', ['-c', `source '${installer}'; xml_escape '/a&b<c>d'`], {
+		encoding: 'utf8'
+	});
+	assert.equal(out, '/a&amp;b&lt;c&gt;d');
+});
+
+test('plist render escapes & as &amp; (valid XML) — the install_service_macos path', () => {
+	// An INSTALL_DIR containing & would otherwise emit invalid XML that launchctl
+	// rejects. Mirror install_service_macos: xml_escape each value, then render.
+	const out = execFileSync(
+		'bash',
+		[
+			'-c',
+			`source '${installer}'; render_template '${plistTmpl}' "INSTALL_DIR=$(xml_escape '/opt/r&d/dir')" "BOOT_SCRIPT=$(xml_escape '/opt/r&d/dir/agent-boot.sh')" "LOG_FILE=$(xml_escape '/opt/r&d/dir/agent-boot.log')"`
+		],
+		{ encoding: 'utf8' }
+	);
+	assert.match(out, /<string>\/opt\/r&amp;d\/dir<\/string>/);
+	assert.doesNotMatch(out, /__[A-Z_]+__/);
 });

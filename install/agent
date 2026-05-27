@@ -123,7 +123,7 @@ detect_platform() {
 
 ensure_docker() {
 	if [ "$DRY_RUN" = '1' ]; then
-		log_dry "verify docker + docker compose v2 are installed"
+		log_dry "docker + docker compose v2 assumed present (verified for real outside --dry-run)"
 		return
 	fi
 	command -v docker >/dev/null 2>&1 || die "docker not found — install Docker (Desktop/OrbStack/Engine) first"
@@ -132,7 +132,7 @@ ensure_docker() {
 
 ensure_tailscale() {
 	if [ "$DRY_RUN" = '1' ]; then
-		log_dry "ensure tailscale is installed and tailscaled is running"
+		log_dry "tailscale install + tailscaled startup skipped (done for real outside --dry-run)"
 		return
 	fi
 	if ! command -v tailscale >/dev/null 2>&1; then
@@ -306,6 +306,16 @@ render_template() {
 	printf '%s\n' "$content"
 }
 
+# XML-escape a value for safe insertion into a plist text node. `&` MUST be first
+# (escaping it after < > would double-encode the ampersands those introduce).
+xml_escape() {
+	local s="$1"
+	s="${s//&/&amp;}"
+	s="${s//</&lt;}"
+	s="${s//>/&gt;}"
+	printf '%s' "$s"
+}
+
 # Install the reboot-survival service: a launchd LaunchAgent (macOS) or a systemd
 # unit (Linux) that runs the stage-2 readiness wrapper (agent-boot.sh) at
 # login/boot. The wrapper is copied INTO the install dir so the installed service
@@ -340,7 +350,13 @@ install_service_macos() {
 		return
 	fi
 	mkdir -p "$HOME/Library/LaunchAgents"
-	render_template "$tmpl" "BOOT_SCRIPT=$boot_dest" "INSTALL_DIR=$INSTALL_DIR" "LOG_FILE=$log_file" >"$plist"
+	# The plist embeds these in XML text nodes, so XML-escape them — an INSTALL_DIR
+	# containing & < > would otherwise produce invalid XML that `launchctl bootstrap`
+	# rejects. launchd un-escapes them back to the literal path when it execs.
+	render_template "$tmpl" \
+		"BOOT_SCRIPT=$(xml_escape "$boot_dest")" \
+		"INSTALL_DIR=$(xml_escape "$INSTALL_DIR")" \
+		"LOG_FILE=$(xml_escape "$log_file")" >"$plist"
 	rm -f "$tmpl" # the rendered $plist is authoritative; drop the intermediate template
 	# Reload cleanly: bootout an existing instance (ignore "not loaded"), bootstrap
 	# the new one, and enable it so it survives reboots. A bootstrap failure must
@@ -367,7 +383,7 @@ install_service_linux() {
 		# No systemd (Alpine/OpenRC, WSL without systemd, …): skip in BOTH modes —
 		# the operator starts the wrapper from their own init system. Keep the
 		# message dry-run-aware so a preview on a non-systemd host reads honestly.
-		local msg="systemctl not found; skipping service install (start manually: bash $boot_dest $INSTALL_DIR)"
+		local msg="systemctl not found; skipping service install (start manually: bash \"$boot_dest\" \"$INSTALL_DIR\")"
 		if [ "$DRY_RUN" = '1' ]; then
 			log_dry "$msg"
 		else
