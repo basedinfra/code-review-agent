@@ -45,3 +45,8 @@ Initial release — Sprint 4 Phase 0 (the agent image repo).
 - **Prompt review-container teardown** — capture results then remove the
   container so provider keys don't linger in Docker config (Sprint 5, when the
   dashboard drives the `/review` lifecycle).
+- **Production networking model** (Sprint 4 Phase 4): `network_mode: host` binds
+  the tailnet IP on Linux/OrbStack but not native macOS Docker Desktop, and it
+  leaves the socket-proxy reachable on host loopback. A private-bridge +
+  tailscale-sidecar model (proxy never host-reachable; macOS-native) is decided
+  during real-install validation.

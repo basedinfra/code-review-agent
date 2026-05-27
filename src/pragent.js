@@ -76,8 +76,14 @@ export function parseMemoryToBytes(spec) {
  * @returns {string[]}
  */
 export function defaultPrAgentCmd(command, prUrl) {
-	const action = String(command || '/review').replace(/^\//, '') || 'review';
-	return ['--pr_url', prUrl, action];
+	const action =
+		String(command || '/review')
+			.replace(/^\//, '')
+			.trim() || 'review';
+	// Tokenize on whitespace so a multi-word command (e.g. "/ask some question")
+	// becomes separate argv items rather than one. For commands with quoted args
+	// or flags, the RPC should send an explicit `cmd` array instead.
+	return ['--pr_url', prUrl, ...action.split(/\s+/)];
 }
 
 /**

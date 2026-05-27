@@ -18,17 +18,38 @@
 #   BISESS_TOKEN           bootstrap token (else prompted)
 #   AGENT_HOSTNAME         tailnet hostname (default: code-review-<BACKEND_ID>)
 #   INSTALL_DIR            default: $HOME/.baseinfra/code-review-agent
-#   REF                    repo ref for fetching compose (default: v1)
+#   REF                    git ref for fetching compose (default: main)
+#   IMAGE_TAG              docker image tag (default: v1)
 #   CODE_REVIEW_AGENT_IMAGE, PR_AGENT_IMAGE, PR_AGENT_PLATFORM
+#
+# NETWORKING (Phase 4): the agent uses `network_mode: host` to bind the host's
+# tailnet IP. That works on Linux and OrbStack; native macOS Docker Desktop
+# mediates host networking through its VM and cannot bind the host tailscale
+# interface, so the production macOS networking model (OrbStack, or tailscale in
+# a sidecar) is validated in Sprint 4 Phase 4. See README "Security model".
 set -euo pipefail
 
 REPO_RAW='https://raw.githubusercontent.com/basedinfra/code-review-agent'
-REF="${REF:-v1}"
+# Git ref for fetching docker-compose.yml (a real branch/tag) — distinct from the
+# Docker image tag, which is published as :v1 from a SemVer git tag (e.g. v1.0.0);
+# there is no git ref named "v1". Pin REF to a release tag for reproducibility.
+REF="${REF:-main}"
+IMAGE_TAG="${IMAGE_TAG:-v1}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.baseinfra/code-review-agent}"
 AGENT_PORT="${AGENT_PORT:-7777}"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# Tailscale state changes (`up`) require root on Linux; prefix with sudo when not
+# already root. macOS does not need this.
+ts_sudo() {
+	if [ "${OS:-}" = 'linux' ] && [ "$(id -u)" -ne 0 ]; then
+		sudo "$@"
+	else
+		"$@"
+	fi
+}
 
 require_env() {
 	local name="$1"
@@ -84,7 +105,7 @@ tailscale_up() {
 	# <=15-min pre-auth keys (the dashboard clamps them), so a key seen in argv is
 	# already spent/expired. The installer itself never takes the key as argv — it
 	# is read via stdin/env (see main()).
-	tailscale up \
+	ts_sudo tailscale up \
 		--login-server="$LOGIN_SERVER" \
 		--authkey="$TS_AUTHKEY" \
 		--hostname="$hostname" \
@@ -131,7 +152,7 @@ compose_up() {
 		# Export once so BOTH `pull` and `up` honor the image/platform overrides
 		# (previously `up` omitted PR_AGENT_IMAGE/PLATFORM, so an override applied
 		# only to the pull, not the running container).
-		export CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${REF}}"
+		export CODE_REVIEW_AGENT_IMAGE="${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:${IMAGE_TAG}}"
 		export PR_AGENT_IMAGE="${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
 		export PR_AGENT_PLATFORM="${PR_AGENT_PLATFORM:-linux/amd64}"
 		export DASHBOARD_URL BACKEND_ID

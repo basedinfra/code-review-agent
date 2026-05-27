@@ -66,12 +66,16 @@ Bound to the **tailnet IP only** (never `0.0.0.0`). Every endpoint except
 ```bash
 # On the BYO machine. The bootstrap token + login server come from the
 # dashboard's pairing wizard; the token is read from stdin (never argv).
-curl -fsSL https://raw.githubusercontent.com/basedinfra/code-review-agent/v1/install/agent | \
+curl -fsSL https://raw.githubusercontent.com/basedinfra/code-review-agent/main/install/agent | \
   BACKEND_ID=42 \
   LOGIN_SERVER=https://headscale.example.com:8443 \
   DASHBOARD_URL=https://dashboard.example.com \
   bash
 ```
+
+> Fetches from the `main` git ref by default (the Docker `:v1` tag is published
+> from a SemVer git tag and is not itself a git ref). Pin `REF=<release-tag>` for
+> reproducibility. On Linux the installer uses `sudo` for `tailscale up`.
 
 The installer detects OS/arch, installs Tailscale (idempotent), joins the
 tailnet with `--advertise-tags=tag:backend-<id>,tag:baseinfra-agent`, pulls this
@@ -85,6 +89,18 @@ Upstream `codiumai/pr-agent` is **amd64-only**. On arm64 Mac minis the agent
 runs it `--platform linux/amd64` under emulation (Rosetta on Docker
 Desktop/OrbStack, qemu otherwise). Reviews work but run slower than native; this
 is the v1 trade-off (an owned multi-arch PR-Agent image is a future option).
+
+## Platform & networking (Phase 4)
+
+The agent uses `network_mode: host` to bind the host's tailnet IP. This works on
+**Linux** and **OrbStack**. Native **macOS Docker Desktop** mediates host
+networking through its VM and cannot bind the host's `tailscale0` interface, so a
+BYO Mac mini needs OrbStack (or a future tailscale-sidecar model). Relatedly, the
+socket-proxy is reachable on host loopback under host networking, so any local
+process on a multi-user box can reach the allowlisted Docker API — acceptable for
+a single-operator box, but the production networking model (private bridge +
+tailscale sidecar so the proxy is never host-reachable) is a **Sprint 4 Phase 4**
+decision, validated against a real install. Tracked in the parent plan.
 
 ## Security model
 
