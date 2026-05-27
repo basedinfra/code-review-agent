@@ -1,0 +1,62 @@
+# BYO code-review agent + docker-socket-proxy. Run on the BYO machine AFTER
+# `tailscale up` — the agent binds the host's tailnet (100.x) interface, so it
+# uses host networking (see src/config.js).
+#
+# SECURITY: the agent NEVER mounts the raw Docker socket. Only the socket-proxy
+# does, behind a tight method/resource allowlist (no EXEC, no privileged, no DinD).
+# The proxy is published on loopback only; the host-networked agent reaches it at
+# 127.0.0.1:2375.
+
+name: baseinfra-code-review
+
+services:
+  agent:
+    image: ${CODE_REVIEW_AGENT_IMAGE:-ghcr.io/basedinfra/code-review-agent:v1}
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      PORT: ${AGENT_PORT:-7777}
+      DASHBOARD_URL: ${DASHBOARD_URL:?set DASHBOARD_URL}
+      BACKEND_ID: ${BACKEND_ID:-}
+      MAX_CONCURRENT_REVIEWS: ${MAX_CONCURRENT_REVIEWS:-3}
+      PR_AGENT_IMAGE: ${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}
+      PR_AGENT_PLATFORM: ${PR_AGENT_PLATFORM:-linux/amd64}
+    # The bootstrap token (BACKEND_BOOTSTRAP_TOKEN) lives in a 0600 env-file the
+    # installer writes — kept out of argv and this committed file. See agent.env.example.
+    env_file:
+      - ${AGENT_ENV_FILE:-./agent.env}
+    depends_on:
+      - socket-proxy
+
+  socket-proxy:
+    image: ${SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:0.3.0}
+    restart: unless-stopped
+    # Loopback only; the host-networked agent connects at 127.0.0.1:2375.
+    ports:
+      - '127.0.0.1:2375:2375'
+    environment:
+      # Allow exactly what the agent needs: pull images and run / stop / inspect /
+      # log ephemeral review containers. Read-only INFO/PING/VERSION feed the
+      # health + system check. Everything else is denied (defaults are 0; the
+      # sensitive ones are pinned to 0 here for auditability).
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      POST: 1
+      INFO: 1
+      PING: 1
+      VERSION: 1
+      EXEC: 0
+      AUTH: 0
+      SECRETS: 0
+      SWARM: 0
+      SYSTEM: 0
+      VOLUMES: 0
+      CONFIGS: 0
+      DISTRIBUTION: 0
+      PLUGINS: 0
+      SERVICES: 0
+      TASKS: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
