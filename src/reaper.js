@@ -83,7 +83,7 @@ export async function pruneReviewContainers({ docker, log = NOOP_LOG, now = Date
 			size: true
 		});
 	} catch (e) {
-		log(`prune skipped: cannot list containers (${e.message})`);
+		log(`prune skipped: cannot list containers (${e?.message ?? String(e)})`);
 		return { removed: 0, candidates: 0 };
 	}
 	const ids = selectContainersToPrune(containers, { now });
@@ -93,7 +93,7 @@ export async function pruneReviewContainers({ docker, log = NOOP_LOG, now = Date
 			await docker.removeContainer(id, { force: true, v: true });
 			removed++;
 		} catch (e) {
-			log(`prune: could not remove ${String(id).slice(0, 12)} (${e.message})`);
+			log(`prune: could not remove ${String(id).slice(0, 12)} (${e?.message ?? String(e)})`);
 		}
 	}
 	if (removed) log(`prune: removed ${removed} old review container(s)`);
@@ -115,7 +115,12 @@ export function startReaper({
 	initialDelayMs = INITIAL_DELAY_MS
 } = {}) {
 	const tick = () => {
-		pruneReviewContainers({ docker, log }).catch((e) => log(`prune error: ${e.message}`));
+		// Promise.resolve().then(...) so even a hypothetical synchronous throw before
+		// pruneReviewContainers returns its promise is routed through .catch — a
+		// future refactor away from `async` would otherwise leak to the timer.
+		Promise.resolve()
+			.then(() => pruneReviewContainers({ docker, log }))
+			.catch((e) => log(`prune error: ${e?.message ?? String(e)}`));
 	};
 	const initial = setTimeout(tick, initialDelayMs);
 	const timer = setInterval(tick, intervalMs);

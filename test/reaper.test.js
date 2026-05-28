@@ -93,7 +93,7 @@ test('pruneReviewContainers is best-effort when Docker is unreachable', async ()
 	assert.deepEqual(res, { removed: 0, candidates: 0 });
 });
 
-test('startReaper fires the initial pass and stop() halts the timers', async () => {
+test('startReaper fires the initial pass and stop() halts subsequent runs', async () => {
 	let calls = 0;
 	const docker = {
 		listContainers: async () => {
@@ -102,12 +102,17 @@ test('startReaper fires the initial pass and stop() halts the timers', async () 
 		},
 		removeContainer: async () => {}
 	};
-	// initialDelayMs=5 to fire fast; intervalMs huge so a single tick is the
-	// initial one (the test verifies the timer wiring, not the cadence).
-	const stop = startReaper({ docker, initialDelayMs: 5, intervalMs: 60_000_000 });
+	// initialDelayMs=5 so the initial pass fires fast; intervalMs=20 so the
+	// recurring timer would otherwise tick during the post-stop wait — making
+	// the second assertion meaningful (a missed clearInterval would increment).
+	const stop = startReaper({ docker, initialDelayMs: 5, intervalMs: 20 });
 	try {
 		await new Promise((r) => setTimeout(r, 40));
 		assert.ok(calls >= 1, 'reaper should run the initial pass');
+		stop();
+		const afterStop = calls;
+		await new Promise((r) => setTimeout(r, 60));
+		assert.equal(calls, afterStop, 'reaper must not run after stop()');
 	} finally {
 		stop();
 	}
