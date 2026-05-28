@@ -34,6 +34,9 @@ TAILSCALE_WAIT_SECS="${TAILSCALE_WAIT_SECS:-120}"
 # would abort the wrapper. Fall back to the default unless it's all digits.
 [[ "$DOCKER_WAIT_SECS" =~ ^[0-9]+$ ]] || DOCKER_WAIT_SECS=180
 [[ "$TAILSCALE_WAIT_SECS" =~ ^[0-9]+$ ]] || TAILSCALE_WAIT_SECS=120
+# Clamp to a sane ceiling so a huge override can't make the unit hang for hours.
+[ "$DOCKER_WAIT_SECS" -le 3600 ] || DOCKER_WAIT_SECS=3600
+[ "$TAILSCALE_WAIT_SECS" -le 3600 ] || TAILSCALE_WAIT_SECS=3600
 
 log() { printf '%s agent-boot: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*"; }
 die() { printf '%s agent-boot ERROR: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$*" >&2; exit 1; }

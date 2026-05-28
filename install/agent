@@ -84,8 +84,9 @@ Options:
                  (alias: INSTALL_SERVICE=0).
   --help         Show this help.
 
-Optional env: AGENT_HOSTNAME, INSTALL_DIR, REF, IMAGE_TAG, AGENT_PORT,
-  CODE_REVIEW_AGENT_IMAGE, PR_AGENT_IMAGE, PR_AGENT_PLATFORM, DEV_LOCAL_COMPOSE.
+Optional env: AGENT_HOSTNAME, INSTALL_DIR, INSTALL_SERVICE, REF, IMAGE_TAG,
+  AGENT_PORT, CODE_REVIEW_AGENT_IMAGE, PR_AGENT_IMAGE, PR_AGENT_PLATFORM,
+  DEV_LOCAL_COMPOSE.
 EOF
 }
 
@@ -316,10 +317,17 @@ xml_escape() {
 	printf '%s' "$s"
 }
 
-# Escape % for a systemd unit value: % starts a specifier (%i, %%, …), so a path
-# with a literal % must double it or `systemd-analyze verify` rejects the unit.
-systemd_pct_escape() {
-	printf '%s' "${1//%/%%}"
+# Escape a value for a double-quoted systemd Exec argument. Inside the quotes,
+# backslash and double-quote are systemd's C-style escapes, and % starts a
+# specifier — any of the three would otherwise break unit parsing (`Unbalanced
+# quoting` / `Failed to resolve specifiers`) for an INSTALL_DIR containing them.
+# Order matters: backslash first, so the escapes added below aren't re-escaped.
+systemd_arg_escape() {
+	local s="$1"
+	s="${s//\\/\\\\}"
+	s="${s//\"/\\\"}"
+	s="${s//%/%%}"
+	printf '%s' "$s"
 }
 
 # Install the reboot-survival service: a launchd LaunchAgent (macOS) or a systemd
@@ -329,7 +337,8 @@ systemd_pct_escape() {
 # liveness is Docker's `restart: unless-stopped`; this unit handles the boot kick.
 install_service() {
 	if [ "$INSTALL_SERVICE" != '1' ]; then
-		log "skipping reboot-survival service (--no-service / INSTALL_SERVICE=0)"
+		local msg="skipping reboot-survival service (--no-service / INSTALL_SERVICE=0)"
+		if [ "$DRY_RUN" = '1' ]; then log_dry "$msg"; else log "$msg"; fi
 		return
 	fi
 	local boot_dest="$INSTALL_DIR/agent-boot.sh"
@@ -346,7 +355,9 @@ install_service_macos() {
 	local boot_dest="$1"
 	local label='com.baseinfra.code-review-agent'
 	local plist="$HOME/Library/LaunchAgents/${label}.plist"
-	local tmpl="$INSTALL_DIR/${label}.plist"
+	# .tmpl suffix so the intermediate never collides with the installed file even
+	# if INSTALL_DIR is itself ~/Library/LaunchAgents (the rm would delete it).
+	local tmpl="$INSTALL_DIR/${label}.plist.tmpl"
 	local log_file="$INSTALL_DIR/agent-boot.log"
 	local uid
 	uid="$(id -u)"
@@ -381,7 +392,9 @@ install_service_linux() {
 	local boot_dest="$1"
 	local unit='baseinfra-code-review-agent.service'
 	local unit_path="/etc/systemd/system/${unit}"
-	local tmpl="$INSTALL_DIR/${unit}"
+	# .tmpl suffix so the intermediate never collides with the installed unit even
+	# if INSTALL_DIR is itself /etc/systemd/system (the rm would delete it).
+	local tmpl="$INSTALL_DIR/${unit}.tmpl"
 	local svc_user
 	svc_user="$(id -un)"
 	# Detect systemd as the INIT system, not just a systemctl binary: WSL images and
@@ -407,11 +420,12 @@ install_service_linux() {
 		log_dry "render systemd unit -> $unit_path (User=$svc_user), then: systemctl daemon-reload; systemctl enable --now $unit"
 		return
 	fi
-	# Escape % (systemd's specifier char) so a path with a literal % isn't expanded.
+	# Escape \ " % so a path with systemd-special chars renders as a literal in the
+	# double-quoted Exec args (not as broken quoting or a specifier).
 	render_template "$tmpl" \
-		"BOOT_SCRIPT=$(systemd_pct_escape "$boot_dest")" \
-		"INSTALL_DIR=$(systemd_pct_escape "$INSTALL_DIR")" \
-		"SERVICE_USER=$(systemd_pct_escape "$svc_user")" | ts_sudo tee "$unit_path" >/dev/null
+		"BOOT_SCRIPT=$(systemd_arg_escape "$boot_dest")" \
+		"INSTALL_DIR=$(systemd_arg_escape "$INSTALL_DIR")" \
+		"SERVICE_USER=$(systemd_arg_escape "$svc_user")" | ts_sudo tee "$unit_path" >/dev/null
 	rm -f "$tmpl" # the installed $unit_path is authoritative; drop the intermediate template
 	# Like the macOS launchctl path, a systemctl failure must NOT abort the installer
 	# (the agent is already registered) — warn with manual recovery instead.

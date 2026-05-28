@@ -197,13 +197,14 @@ test('xml_escape encodes XML metacharacters for plist text nodes', () => {
 	assert.equal(out, '/a&amp;b&lt;c&gt;d');
 });
 
-test('systemd_pct_escape doubles % so systemd does not expand it as a specifier', () => {
+test('systemd_arg_escape escapes %, and " for double-quoted Exec args', () => {
 	const out = execFileSync(
 		'bash',
-		['-c', `source '${installer}'; systemd_pct_escape '/opt/100%/agent'`],
+		['-c', `source '${installer}'; systemd_arg_escape '/opt/100%/a"b'`],
 		{ encoding: 'utf8' }
 	);
-	assert.equal(out, '/opt/100%%/agent');
+	// % -> %% (specifier), " -> \" (C-style escape inside the quoted Exec arg)
+	assert.equal(out, '/opt/100%%/a\\"b');
 });
 
 test('plist render escapes & as &amp; (valid XML) — the install_service_macos path', () => {
