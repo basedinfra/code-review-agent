@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  BaseInfra code-review agent — macOS reboot-survival (stage 1 of 2).
+
+  A per-user LaunchAgent, NOT a system LaunchDaemon: on macOS the Docker engine
+  (Docker Desktop / OrbStack) runs inside the logged-in user's session, so a
+  root boot-time daemon could never reach it. RunAtLoad fires this at login; it
+  execs the stage-2 readiness wrapper (agent-boot.sh), which waits for Docker +
+  tailscale and then `docker compose up -d`. KeepAlive is false — the wrapper is
+  a one-shot bring-up that exits after `up -d`; per-container liveness is Docker's
+  own `restart: unless-stopped`. The installer renders the placeholders below.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.baseinfra.code-review-agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/env</string>
+		<string>bash</string>
+		<string>__BOOT_SCRIPT__</string>
+		<string>__INSTALL_DIR__</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<false/>
+	<key>ProcessType</key>
+	<string>Background</string>
+	<key>StandardOutPath</key>
+	<string>__LOG_FILE__</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG_FILE__</string>
+</dict>
+</plist>

@@ -1,0 +1,237 @@
+// Phase 2 installer tests. The real install path (Tailscale join → compose up →
+// register → service) is exercised by the Phase 4 CI Mac-runner e2e; here we
+// pin the two things that are unit-testable off-host:
+//
+//   1. `--dry-run` walks the WHOLE pipeline, redacts secrets, and touches NOTHING
+//      on disk (so an operator — or this test — can preview an install safely).
+//   2. the input contract: required-env / unknown-arg / --help / --no-service.
+//
+// shellcheck (CI) covers the scripts' syntax; this covers their behavior.
+
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const installer = fileURLToPath(new URL('../install/agent', import.meta.url));
+const bootScript = fileURLToPath(new URL('../install/agent-boot.sh', import.meta.url));
+const serviceTmpl = fileURLToPath(
+	new URL('../install/service/baseinfra-code-review-agent.service', import.meta.url)
+);
+const plistTmpl = fileURLToPath(
+	new URL('../install/service/com.baseinfra.code-review-agent.plist', import.meta.url)
+);
+
+// Render a template through the installer's OWN render_template (sourced, so
+// main() doesn't run and no privileged command is invoked) — the exact code path
+// a real install uses. `pairs` are KEY=VALUE strings.
+function renderTemplate(tmpl, pairs) {
+	const quoted = pairs.map((p) => `'${p.replace(/'/g, "'\\''")}'`).join(' ');
+	return execFileSync(
+		'bash',
+		['-c', `source '${installer}'; render_template '${tmpl}' ${quoted}`],
+		{
+			encoding: 'utf8'
+		}
+	);
+}
+
+// Run a script under bash, returning { status, stdout, stderr }. Never throws on
+// a non-zero exit (we assert on the code), so both success and failure paths read
+// the same way.
+function runScript(script, args, env = {}) {
+	try {
+		const stdout = execFileSync('bash', [script, ...args], {
+			env: { ...process.env, ...env },
+			encoding: 'utf8',
+			stdio: ['ignore', 'pipe', 'pipe']
+		});
+		return { status: 0, stdout, stderr: '' };
+	} catch (e) {
+		return {
+			status: e.status ?? 1,
+			stdout: String(e.stdout ?? ''),
+			stderr: String(e.stderr ?? '')
+		};
+	}
+}
+
+const REQUIRED_ENV = {
+	BACKEND_ID: '42',
+	LOGIN_SERVER: 'https://headscale.example.com:8443',
+	DASHBOARD_URL: 'https://dashboard.example.com'
+};
+
+test('--dry-run walks the full pipeline and touches nothing on disk', () => {
+	const tmp = mkdtempSync(join(tmpdir(), 'cr-agent-'));
+	const installDir = join(tmp, 'agent');
+	try {
+		const { status, stdout } = runScript(installer, ['--dry-run'], {
+			...REQUIRED_ENV,
+			INSTALL_DIR: installDir,
+			// Secrets intentionally absent — a dry run must not require or prompt them.
+			TS_AUTHKEY: '',
+			BISESS_TOKEN: '',
+			BACKEND_BOOTSTRAP_TOKEN: ''
+		});
+
+		assert.equal(status, 0);
+		// Every pipeline stage is previewed.
+		assert.match(stdout, /DRY RUN/);
+		assert.match(stdout, /tailscale up/);
+		assert.match(stdout, /docker compose up -d/);
+		assert.match(stdout, /register\.js/);
+		assert.match(stdout, /agent-boot\.sh/); // the reboot-survival service
+		// The pre-auth key is shown as a shape, never as a value.
+		assert.match(stdout, /--authkey=<redacted>/);
+		// And nothing was written: the install dir must not exist after a dry run.
+		assert.equal(existsSync(installDir), false, 'dry run must not create the install dir');
+	} finally {
+		rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test('--no-service skips the reboot-survival service', () => {
+	const { status, stdout } = runScript(installer, ['--dry-run', '--no-service'], REQUIRED_ENV);
+	assert.equal(status, 0);
+	assert.match(stdout, /skipping reboot-survival service/);
+	assert.doesNotMatch(stdout, /agent-boot\.sh/);
+});
+
+test('missing required env fails fast with a clear message', () => {
+	const { status, stderr } = runScript(installer, ['--dry-run'], {
+		BACKEND_ID: '',
+		LOGIN_SERVER: '',
+		DASHBOARD_URL: ''
+	});
+	assert.equal(status, 1);
+	assert.match(stderr, /missing required env/);
+});
+
+test('an unknown argument is rejected', () => {
+	const { status, stderr } = runScript(installer, ['--bogus'], REQUIRED_ENV);
+	assert.equal(status, 1);
+	assert.match(stderr, /unknown argument/);
+});
+
+test('--help documents the flags and exits 0', () => {
+	const { status, stdout } = runScript(installer, ['--help']);
+	assert.equal(status, 0);
+	assert.match(stdout, /--dry-run/);
+	assert.match(stdout, /--no-service/);
+	assert.match(stdout, /BACKEND_ID/);
+});
+
+test('agent-boot.sh refuses a dir with no docker-compose.yml (before any docker call)', () => {
+	// The compose-file guard is the first line of the wrapper's main(), ahead of
+	// the docker/tailscale waits — so this never shells out to a real engine. A
+	// fresh empty temp dir keeps the assertion deterministic.
+	const tmp = mkdtempSync(join(tmpdir(), 'cr-agent-missing-compose-'));
+	try {
+		const { status, stderr } = runScript(bootScript, [tmp]);
+		assert.notEqual(status, 0);
+		assert.match(stderr, /no docker-compose\.yml/);
+	} finally {
+		rmSync(tmp, { recursive: true, force: true });
+	}
+});
+
+test('render_template preserves & in paths (no bash 5.2 patsub_replacement corruption)', () => {
+	const out = renderTemplate(serviceTmpl, [
+		'BOOT_SCRIPT=/opt/r&d/agent-boot.sh',
+		'INSTALL_DIR=/opt/r&d',
+		'SERVICE_USER=op'
+	]);
+	// With patsub_replacement (bash 5.2 default) an unescaped & expands back to the
+	// matched __INSTALL_DIR__ token; assert the literal & survived instead.
+	assert.match(out, /"\/opt\/r&d\/agent-boot\.sh"/);
+	assert.match(out, /"\/opt\/r&d"/);
+	assert.doesNotMatch(out, /__[A-Z_]+__/);
+});
+
+// A path with spaces (a legal INSTALL_DIR override) is the case the old sed-based
+// rendering broke — argv-splitting in the systemd unit, sed metachar breakage.
+const SPACED_DIR = '/opt/my agent/dir';
+
+test('render_template fills the systemd unit with quoted, space-safe paths', () => {
+	const out = renderTemplate(serviceTmpl, [
+		`BOOT_SCRIPT=${SPACED_DIR}/agent-boot.sh`,
+		`INSTALL_DIR=${SPACED_DIR}`,
+		'SERVICE_USER=op'
+	]);
+	assert.doesNotMatch(out, /__[A-Z_]+__/, 'no placeholder tokens may remain');
+	// Paths are quoted so systemd does not split the spaced dir across argv.
+	assert.match(
+		out,
+		/ExecStart=\/usr\/bin\/env bash "\/opt\/my agent\/dir\/agent-boot\.sh" "\/opt\/my agent\/dir"/
+	);
+	// ExecStop passes the dir as a positional ($$1 → systemd-escaped $1) so a path
+	// with a literal ' can't break the single-quoted sh snippet; the path rides in a
+	// separate quoted argv.
+	assert.match(
+		out,
+		/ExecStop=\/bin\/sh -c 'cd "\$\$1" && docker compose stop' sh "\/opt\/my agent\/dir"/
+	);
+	assert.match(out, /^User=op$/m);
+});
+
+test('render_template fills the launchd plist and leaves no placeholders', () => {
+	const out = renderTemplate(plistTmpl, [
+		`BOOT_SCRIPT=${SPACED_DIR}/agent-boot.sh`,
+		`INSTALL_DIR=${SPACED_DIR}`,
+		`LOG_FILE=${SPACED_DIR}/agent-boot.log`
+	]);
+	assert.doesNotMatch(out, /__[A-Z_]+__/, 'no placeholder tokens may remain');
+	// The plist passes each arg as its own <string>, so the spaced dir is safe.
+	assert.match(out, /<string>\/usr\/bin\/env<\/string>/);
+	assert.match(out, /<string>\/opt\/my agent\/dir\/agent-boot\.sh<\/string>/);
+	assert.match(out, /<string>\/opt\/my agent\/dir<\/string>/);
+});
+
+test('xml_escape encodes XML metacharacters for plist text nodes', () => {
+	const out = execFileSync('bash', ['-c', `source '${installer}'; xml_escape '/a&b<c>d'`], {
+		encoding: 'utf8'
+	});
+	assert.equal(out, '/a&amp;b&lt;c&gt;d');
+});
+
+test('render_template does not re-substitute a placeholder token that appears inside a value', () => {
+	// Pathological: a value (BOOT_SCRIPT) literally contains another placeholder
+	// token. The two-pass sentinel render must leave it intact, not replace it with
+	// the INSTALL_DIR value.
+	const out = renderTemplate(serviceTmpl, [
+		'BOOT_SCRIPT=/opt/__INSTALL_DIR__/agent-boot.sh',
+		'INSTALL_DIR=/realdir',
+		'SERVICE_USER=op'
+	]);
+	assert.match(out, /\/opt\/__INSTALL_DIR__\/agent-boot\.sh/); // value's token survived
+	assert.match(out, /"\/realdir"/); // the real __INSTALL_DIR__ token resolved
+});
+
+test('systemd_arg_escape escapes %, ", and $ for double-quoted Exec args', () => {
+	const out = execFileSync(
+		'bash',
+		['-c', `source '${installer}'; systemd_arg_escape '/opt/100%/a"b$c'`],
+		{ encoding: 'utf8' }
+	);
+	// " -> \" , $ -> $$ (systemd specifier/var expansion), % -> %%
+	assert.equal(out, '/opt/100%%/a\\"b$$c');
+});
+
+test('plist render escapes & as &amp; (valid XML) — the install_service_macos path', () => {
+	// An INSTALL_DIR containing & would otherwise emit invalid XML that launchctl
+	// rejects. Mirror install_service_macos: xml_escape each value, then render.
+	const out = execFileSync(
+		'bash',
+		[
+			'-c',
+			`source '${installer}'; render_template '${plistTmpl}' "INSTALL_DIR=$(xml_escape '/opt/r&d/dir')" "BOOT_SCRIPT=$(xml_escape '/opt/r&d/dir/agent-boot.sh')" "LOG_FILE=$(xml_escape '/opt/r&d/dir/agent-boot.log')"`
+		],
+		{ encoding: 'utf8' }
+	);
+	assert.match(out, /<string>\/opt\/r&amp;d\/dir<\/string>/);
+	assert.doesNotMatch(out, /__[A-Z_]+__/);
+});

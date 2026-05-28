@@ -80,8 +80,44 @@ curl -fsSL https://raw.githubusercontent.com/basedinfra/code-review-agent/main/i
 The installer detects OS/arch, installs Tailscale (idempotent), joins the
 tailnet with `--advertise-tags=tag:backend-<id>,tag:baseinfra-agent`, pulls this
 image, `docker compose up -d`s the agent + socket-proxy, waits for `/health`,
-and runs the one-shot register (with `409`/`429` backoff while the node becomes
-visible in Headscale).
+runs the one-shot register (with `409`/`429` backoff while the node becomes
+visible in Headscale), and installs a reboot-survival service (below).
+
+Preview the whole thing without changing anything — and without needing the
+secrets — with `--dry-run`:
+
+```bash
+install/agent --dry-run
+```
+
+On a `curl | bash` install, pass the flags after `bash -s --` (the same applies to
+`--no-service`; the `DRY_RUN=1` / `INSTALL_SERVICE=0` env vars also work):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/basedinfra/code-review-agent/main/install/agent | \
+  BACKEND_ID=42 LOGIN_SERVER=https://headscale.example.com:8443 \
+  DASHBOARD_URL=https://dashboard.example.com bash -s -- --dry-run
+```
+
+## Reboot survival
+
+So the agent comes back after a reboot, the installer sets up a service (skip it
+with `--no-service`, or `INSTALL_SERVICE=0`):
+
+- **macOS** — a per-user **launchd LaunchAgent**
+  (`~/Library/LaunchAgents/com.baseinfra.code-review-agent.plist`). It has to be
+  a LaunchAgent, not a root LaunchDaemon: the Docker engine (Docker Desktop /
+  OrbStack) runs in the logged-in user's session, so a boot-time root daemon
+  could never reach it.
+- **Linux** — a **systemd unit**
+  (`/etc/systemd/system/baseinfra-code-review-agent.service`; `Type=oneshot` +
+  `RemainAfterExit`, ordered `After=docker.service`).
+
+Both are **two-stage**: the LaunchAgent/systemd unit is just the boot trigger; it
+runs a readiness wrapper (`install/agent-boot.sh`, copied into the install dir)
+that waits for the Docker engine and a tailnet IPv4 before `docker compose up -d`.
+Per-container liveness after that is Docker's own `restart: unless-stopped` — the
+service only handles the boot kick and dependency ordering.
 
 ## arm64 / Apple silicon
 
@@ -159,7 +195,8 @@ and smoke-test only — they never push.
 ```bash
 npm ci
 npm run lint          # prettier --check + eslint
-npm test              # node --test (unit)
+npm test              # node --test (unit; install/agent --dry-run is covered here)
+shellcheck install/agent install/agent-boot.sh test/smoke.sh
 docker buildx build --platform linux/amd64 --load -t code-review-agent:dev .
 bash test/smoke.sh code-review-agent:dev
 ```
