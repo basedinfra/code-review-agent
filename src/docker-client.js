@@ -311,12 +311,28 @@ export class DockerClient {
 	}
 
 	/**
-	 * @param {{ all?: boolean, label?: string, signal?: AbortSignal }} [opts]
-	 * @returns {Promise<Array<{ Id: string }>>}
+	 * @param {{ all?: boolean, label?: string, size?: boolean, signal?: AbortSignal }} [opts]
+	 *   `size:true` adds `SizeRw`/`SizeRootFs` to each item (Docker's `?size=true`).
+	 * @returns {Promise<Array<{
+	 *   Id: string,
+	 *   State?: string,
+	 *   Created?: number,
+	 *   Labels?: Record<string, string>,
+	 *   SizeRw?: number,
+	 *   SizeRootFs?: number
+	 * }>>}
+	 *   The full Engine API container-list item; only commonly-consumed fields are
+	 *   annotated. `Size*` fields are only populated when `size:true`.
 	 */
-	listContainers({ all = true, label, signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS) } = {}) {
+	listContainers({
+		all = true,
+		label,
+		size = false,
+		signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS)
+	} = {}) {
 		const qs = new URLSearchParams({ all: String(all) });
 		if (label) qs.set('filters', JSON.stringify({ label: [label] }));
+		if (size) qs.set('size', 'true');
 		return this._json('GET', `/containers/json?${qs}`, { signal });
 	}
 

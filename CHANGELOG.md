@@ -21,6 +21,12 @@ are produced by the weekly rebuild.
 - Installer **`--dry-run`** (prints every step with secrets redacted and touches
   nothing on disk, so an install can be previewed safely), **`--no-service`**
   (alias `INSTALL_SERVICE=0`), and **`--help`** flags.
+- **Daily log-prune / reaper** (Sprint 4 Phase 3): review containers are kept
+  after exit so `/logs/:id` can read results, so they accumulate on the BYO disk.
+  The agent now reaps its own exited review containers — any finished more than
+  **7 days** ago, plus oldest-first once their writable-layer total exceeds
+  **100 MB**. Runs ~1 min after boot then daily; never touches a running review,
+  and is best-effort (a Docker hiccup is logged, never fatal).
 
 ### Changed
 
