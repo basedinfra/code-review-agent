@@ -311,12 +311,19 @@ export class DockerClient {
 	}
 
 	/**
-	 * @param {{ all?: boolean, label?: string, signal?: AbortSignal }} [opts]
+	 * @param {{ all?: boolean, label?: string, size?: boolean, signal?: AbortSignal }} [opts]
+	 *   `size:true` adds `SizeRw`/`SizeRootFs` to each item (Docker's `?size=true`).
 	 * @returns {Promise<Array<{ Id: string }>>}
 	 */
-	listContainers({ all = true, label, signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS) } = {}) {
+	listContainers({
+		all = true,
+		label,
+		size = false,
+		signal = AbortSignal.timeout(DEFAULT_OP_TIMEOUT_MS)
+	} = {}) {
 		const qs = new URLSearchParams({ all: String(all) });
 		if (label) qs.set('filters', JSON.stringify({ label: [label] }));
+		if (size) qs.set('size', 'true');
 		return this._json('GET', `/containers/json?${qs}`, { signal });
 	}
 

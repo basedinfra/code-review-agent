@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { DockerClient } from './docker-client.js';
 import { Reviews } from './reviews.js';
 import { createRequestListener } from './server.js';
+import { startReaper } from './reaper.js';
 
 function log(msg) {
 	console.log(`[agent] ${new Date().toISOString()} ${msg}`);
@@ -50,8 +51,14 @@ function main() {
 		);
 	});
 
+	// Daily reaper: review containers are kept after exit so /logs/:id can read
+	// results, so they pile up on the BYO disk — prune old/oversized ones (Phase 3).
+	// Self-bounded + unref'd; never holds the process open on its own.
+	const stopReaper = startReaper({ docker, log });
+
 	const shutdown = (sig) => {
 		log(`${sig} received, shutting down`);
+		stopReaper();
 		server.close(() => process.exit(0));
 		setTimeout(() => process.exit(0), 5000).unref();
 	};

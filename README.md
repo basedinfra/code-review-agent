@@ -119,6 +119,15 @@ that waits for the Docker engine and a tailnet IPv4 before `docker compose up -d
 Per-container liveness after that is Docker's own `restart: unless-stopped` — the
 service only handles the boot kick and dependency ordering.
 
+## Disk hygiene
+
+Review containers are kept after they exit (so `/logs/:id` can read results), so
+they'd otherwise pile up on the BYO disk. A built-in **reaper** runs ~1 min after
+boot and then daily, removing the agent's own exited review containers older than
+**7 days** — and, oldest-first, once their writable-layer total exceeds **100 MB**.
+It never touches a running review and is best-effort (a Docker hiccup is logged,
+not fatal).
+
 ## arm64 / Apple silicon
 
 Upstream `codiumai/pr-agent` is **amd64-only**. On arm64 Mac minis the agent
