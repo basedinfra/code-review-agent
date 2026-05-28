@@ -198,6 +198,19 @@ test('xml_escape encodes XML metacharacters for plist text nodes', () => {
 	assert.equal(out, '/a&amp;b&lt;c&gt;d');
 });
 
+test('render_template does not re-substitute a placeholder token that appears inside a value', () => {
+	// Pathological: a value (BOOT_SCRIPT) literally contains another placeholder
+	// token. The two-pass sentinel render must leave it intact, not replace it with
+	// the INSTALL_DIR value.
+	const out = renderTemplate(serviceTmpl, [
+		'BOOT_SCRIPT=/opt/__INSTALL_DIR__/agent-boot.sh',
+		'INSTALL_DIR=/realdir',
+		'SERVICE_USER=op'
+	]);
+	assert.match(out, /\/opt\/__INSTALL_DIR__\/agent-boot\.sh/); // value's token survived
+	assert.match(out, /"\/realdir"/); // the real __INSTALL_DIR__ token resolved
+});
+
 test('systemd_arg_escape escapes %, ", and $ for double-quoted Exec args', () => {
 	const out = execFileSync(
 		'bash',

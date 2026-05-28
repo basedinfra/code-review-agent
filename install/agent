@@ -312,11 +312,20 @@ render_template() {
 	local tmpl="$1"
 	shift
 	local content pair key val
+	# Two passes via a US (0x1f) sentinel — a control char that can't occur in the
+	# template or in a path/value: first __TOKEN__ -> sentinel, then sentinel ->
+	# value. This way a value that itself contains a __TOKEN__ (e.g. a pathological
+	# INSTALL_DIR) is inserted in pass 2 and never re-scanned/re-substituted.
+	local sep=$'\x1f'
 	content="$(cat "$tmpl")"
 	for pair in "$@"; do
 		key="${pair%%=*}"
+		content="${content//__${key}__/${sep}${key}${sep}}"
+	done
+	for pair in "$@"; do
+		key="${pair%%=*}"
 		val="${pair#*=}"
-		content="${content//__${key}__/$val}"
+		content="${content//${sep}${key}${sep}/$val}"
 	done
 	printf '%s\n' "$content"
 }
