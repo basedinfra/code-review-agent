@@ -168,11 +168,12 @@ test('render_template fills the systemd unit with quoted, space-safe paths', () 
 		out,
 		/ExecStart=\/usr\/bin\/env bash "\/opt\/my agent\/dir\/agent-boot\.sh" "\/opt\/my agent\/dir"/
 	);
-	// ExecStop passes the dir as a positional ($1) so a path with a literal ' can't
-	// break the single-quoted sh snippet; the path rides in a separate quoted argv.
+	// ExecStop passes the dir as a positional ($$1 → systemd-escaped $1) so a path
+	// with a literal ' can't break the single-quoted sh snippet; the path rides in a
+	// separate quoted argv.
 	assert.match(
 		out,
-		/ExecStop=\/bin\/sh -c 'cd "\$1" && docker compose stop' sh "\/opt\/my agent\/dir"/
+		/ExecStop=\/bin\/sh -c 'cd "\$\$1" && docker compose stop' sh "\/opt\/my agent\/dir"/
 	);
 	assert.match(out, /^User=op$/m);
 });
@@ -197,14 +198,14 @@ test('xml_escape encodes XML metacharacters for plist text nodes', () => {
 	assert.equal(out, '/a&amp;b&lt;c&gt;d');
 });
 
-test('systemd_arg_escape escapes %, and " for double-quoted Exec args', () => {
+test('systemd_arg_escape escapes %, ", and $ for double-quoted Exec args', () => {
 	const out = execFileSync(
 		'bash',
-		['-c', `source '${installer}'; systemd_arg_escape '/opt/100%/a"b'`],
+		['-c', `source '${installer}'; systemd_arg_escape '/opt/100%/a"b$c'`],
 		{ encoding: 'utf8' }
 	);
-	// % -> %% (specifier), " -> \" (C-style escape inside the quoted Exec arg)
-	assert.equal(out, '/opt/100%%/a\\"b');
+	// " -> \" , $ -> $$ (systemd specifier/var expansion), % -> %%
+	assert.equal(out, '/opt/100%%/a\\"b$$c');
 });
 
 test('plist render escapes & as &amp; (valid XML) — the install_service_macos path', () => {

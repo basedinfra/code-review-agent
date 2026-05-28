@@ -340,6 +340,7 @@ systemd_arg_escape() {
 	local s="$1"
 	s="${s//\\/\\\\}"
 	s="${s//\"/\\\"}"
+	s="${s//\$/\$\$}"
 	s="${s//%/%%}"
 	printf '%s' "$s"
 }
@@ -356,7 +357,12 @@ install_service() {
 		return
 	fi
 	local boot_dest="$INSTALL_DIR/agent-boot.sh"
-	fetch_asset 'install/agent-boot.sh' "$boot_dest"
+	# Guard the fetch: a transient curl failure (or a REF pinned to a tag that
+	# predates these files) must NOT abort the installer after registration.
+	if ! fetch_asset 'install/agent-boot.sh' "$boot_dest"; then
+		log "WARNING: could not fetch the boot wrapper; reboot-survival not installed (the agent is registered + running)."
+		return 0
+	fi
 	[ "$DRY_RUN" = '1' ] || chmod +x "$boot_dest"
 	if [ "$OS" = 'darwin' ]; then
 		install_service_macos "$boot_dest"
@@ -375,7 +381,10 @@ install_service_macos() {
 	local log_file="$INSTALL_DIR/agent-boot.log"
 	local uid
 	uid="$(id -u)"
-	fetch_asset "install/service/${label}.plist" "$tmpl"
+	if ! fetch_asset "install/service/${label}.plist" "$tmpl"; then
+		log "WARNING: could not fetch the LaunchAgent template; reboot-survival not installed (the agent is registered + running)."
+		return 0
+	fi
 	if [ "$DRY_RUN" = '1' ]; then
 		log_dry "render LaunchAgent -> $plist, then: launchctl bootout/bootstrap gui/$uid"
 		return
@@ -436,7 +445,10 @@ install_service_linux() {
 	fi
 	# Fetch only after the probe so a non-systemd host neither pulls the template nor
 	# leaves it behind, and the dry-run transcript stays clean on a skip.
-	fetch_asset "install/service/${unit}" "$tmpl"
+	if ! fetch_asset "install/service/${unit}" "$tmpl"; then
+		log "WARNING: could not fetch the systemd unit template; reboot-survival not installed (the agent is registered + running)."
+		return 0
+	fi
 	if [ "$DRY_RUN" = '1' ]; then
 		log_dry "render systemd unit -> $unit_path (User=$svc_user), then: systemctl daemon-reload; systemctl enable --now $unit"
 		return
