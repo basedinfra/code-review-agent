@@ -52,6 +52,13 @@ REPO_RAW='https://raw.githubusercontent.com/basedinfra/code-review-agent'
 REF="${REF:-main}"
 IMAGE_TAG="${IMAGE_TAG:-v1}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.baseinfra/code-review-agent}"
+# Absolutize: the rendered launchd/systemd service embeds these paths and runs from
+# a different cwd at boot, so a relative INSTALL_DIR (e.g. INSTALL_DIR=agent) would
+# break reboot-survival. The default is already absolute; this only fixes overrides.
+case "$INSTALL_DIR" in
+	/*) ;;
+	*) INSTALL_DIR="$PWD/$INSTALL_DIR" ;;
+esac
 AGENT_PORT="${AGENT_PORT:-7777}"
 # Set by flags / env at the bottom of the file, before main() runs.
 DRY_RUN="${DRY_RUN:-0}"
@@ -234,7 +241,7 @@ fetch_compose() { fetch_asset 'docker-compose.yml' "$INSTALL_DIR/docker-compose.
 
 compose_up() {
 	if [ "$DRY_RUN" = '1' ]; then
-		log_dry "write $INSTALL_DIR/.env (CODE_REVIEW_AGENT_IMAGE / PR_AGENT_* / AGENT_PORT)"
+		log_dry "write $INSTALL_DIR/.env (image/platform/port/concurrency/proxy interpolation vars)"
 		log_dry "(cd $INSTALL_DIR && docker compose pull && docker compose up -d)"
 		return
 	fi
@@ -248,6 +255,11 @@ compose_up() {
 		printf 'PR_AGENT_IMAGE=%s\n' "${PR_AGENT_IMAGE:-codiumai/pr-agent:latest}"
 		printf 'PR_AGENT_PLATFORM=%s\n' "${PR_AGENT_PLATFORM:-linux/amd64}"
 		printf 'AGENT_PORT=%s\n' "$AGENT_PORT"
+		# Persist every var docker-compose.yml interpolates, so the reboot service
+		# (which runs with only the service env) recreates the stack identically
+		# instead of falling back to compose defaults (e.g. concurrency, proxy image).
+		printf 'MAX_CONCURRENT_REVIEWS=%s\n' "${MAX_CONCURRENT_REVIEWS:-3}"
+		printf 'SOCKET_PROXY_IMAGE=%s\n' "${SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:0.3.0}"
 	} >"$INSTALL_DIR/.env"
 	(
 		cd "$INSTALL_DIR"
@@ -381,6 +393,9 @@ install_service_macos() {
 		return 0
 	fi
 	rm -f "$tmpl" # the rendered $plist is authoritative; drop the intermediate template
+	# launchd refuses to load a group/world-writable plist (permissive umask), so
+	# make it owner-writable only before bootstrapping.
+	chmod 644 "$plist"
 	# Reload cleanly: bootout an existing instance (ignore "not loaded"), bootstrap
 	# the new one, and enable it so it survives reboots. A bootstrap failure must
 	# NOT abort the installer (the agent is already registered) — warn with the
