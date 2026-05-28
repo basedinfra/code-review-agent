@@ -48,7 +48,7 @@ wait_for_docker() {
 	local waited=0
 	while ! docker info >/dev/null 2>&1; do
 		if [ "$waited" -ge "$DOCKER_WAIT_SECS" ]; then
-			die "Docker engine not ready after ${DOCKER_WAIT_SECS}s"
+			die "Docker engine not ready after ${DOCKER_WAIT_SECS}s (PATH=$PATH; raise DOCKER_WAIT_SECS to wait longer)"
 		fi
 		sleep 3
 		waited=$((waited + 3))

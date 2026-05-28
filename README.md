@@ -90,6 +90,15 @@ secrets — with `--dry-run`:
 install/agent --dry-run
 ```
 
+On a `curl | bash` install, pass the flags after `bash -s --` (the same applies to
+`--no-service`; the `DRY_RUN=1` / `INSTALL_SERVICE=0` env vars also work):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/basedinfra/code-review-agent/main/install/agent | \
+  BACKEND_ID=42 LOGIN_SERVER=https://headscale.example.com:8443 \
+  DASHBOARD_URL=https://dashboard.example.com bash -s -- --dry-run
+```
+
 ## Reboot survival
 
 So the agent comes back after a reboot, the installer sets up a service (skip it

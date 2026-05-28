@@ -68,6 +68,8 @@ BaseInfra BYO code-review agent installer.
 Usage:
   install/agent [--dry-run] [--no-service] [--help]
   curl -fsSL .../install/agent | BACKEND_ID=.. LOGIN_SERVER=.. DASHBOARD_URL=.. bash
+  # piped install with flags — pass them after `bash -s --`:
+  curl -fsSL .../install/agent | BACKEND_ID=.. LOGIN_SERVER=.. DASHBOARD_URL=.. bash -s -- --dry-run
 
 Required env:
   BACKEND_ID     code_review_backends row id (advertised as tag:backend-<id>)
@@ -366,14 +368,18 @@ install_service_macos() {
 		log_dry "render LaunchAgent -> $plist, then: launchctl bootout/bootstrap gui/$uid"
 		return
 	fi
-	mkdir -p "$HOME/Library/LaunchAgents"
 	# The plist embeds these in XML text nodes, so XML-escape them — an INSTALL_DIR
 	# containing & < > would otherwise produce invalid XML that `launchctl bootstrap`
-	# rejects. launchd un-escapes them back to the literal path when it execs.
-	render_template "$tmpl" \
+	# rejects. launchd un-escapes them back to the literal path when it execs. The
+	# mkdir+write is guarded: a failure here (perms, disk full) must NOT abort the
+	# installer (the agent is already registered) — warn instead.
+	if ! { mkdir -p "$HOME/Library/LaunchAgents" && render_template "$tmpl" \
 		"BOOT_SCRIPT=$(xml_escape "$boot_dest")" \
 		"INSTALL_DIR=$(xml_escape "$INSTALL_DIR")" \
-		"LOG_FILE=$(xml_escape "$log_file")" >"$plist"
+		"LOG_FILE=$(xml_escape "$log_file")" >"$plist"; }; then
+		log "WARNING: could not write $plist; the agent is installed + registered but won't auto-start on reboot."
+		return 0
+	fi
 	rm -f "$tmpl" # the rendered $plist is authoritative; drop the intermediate template
 	# Reload cleanly: bootout an existing instance (ignore "not loaded"), bootstrap
 	# the new one, and enable it so it survives reboots. A bootstrap failure must
@@ -422,15 +428,24 @@ install_service_linux() {
 	fi
 	# Escape \ " % so a path with systemd-special chars renders as a literal in the
 	# double-quoted Exec args (not as broken quoting or a specifier).
-	render_template "$tmpl" \
+	# Guard the render+write: a failure (sudo/perms on /etc/systemd/system) must NOT
+	# abort the installer (the agent is already registered) — warn instead.
+	if ! render_template "$tmpl" \
 		"BOOT_SCRIPT=$(systemd_arg_escape "$boot_dest")" \
 		"INSTALL_DIR=$(systemd_arg_escape "$INSTALL_DIR")" \
-		"SERVICE_USER=$(systemd_arg_escape "$svc_user")" | ts_sudo tee "$unit_path" >/dev/null
+		"SERVICE_USER=$(systemd_arg_escape "$svc_user")" | ts_sudo tee "$unit_path" >/dev/null; then
+		log "WARNING: could not write $unit_path; the agent is installed + registered but won't auto-start on reboot."
+		return 0
+	fi
 	rm -f "$tmpl" # the installed $unit_path is authoritative; drop the intermediate template
-	# Like the macOS launchctl path, a systemctl failure must NOT abort the installer
-	# (the agent is already registered) — warn with manual recovery instead.
-	if ! ts_sudo systemctl daemon-reload || ! ts_sudo systemctl enable --now "$unit"; then
-		log "WARNING: systemctl enable failed; the agent is installed + registered but won't auto-start on reboot. Recover manually: sudo systemctl daemon-reload && sudo systemctl enable --now $unit"
+	# Run daemon-reload and enable sequentially (not short-circuited with ||) so the
+	# warning names the step that actually failed. Neither must abort the installer.
+	if ! ts_sudo systemctl daemon-reload; then
+		log "WARNING: systemctl daemon-reload failed; the agent is installed + registered but won't auto-start on reboot. Recover manually: sudo systemctl daemon-reload && sudo systemctl enable --now $unit"
+		return 0
+	fi
+	if ! ts_sudo systemctl enable --now "$unit"; then
+		log "WARNING: systemctl enable failed; the agent is installed + registered but won't auto-start on reboot. Recover manually: sudo systemctl enable --now $unit"
 		return 0
 	fi
 	log "installed systemd unit: $unit_path"
